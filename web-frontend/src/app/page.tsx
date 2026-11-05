@@ -1,5 +1,10 @@
 "use client";
 import { useState } from 'react';
+// 新增的 Markdown 和公式渲染依赖
+import ReactMarkdown from 'react-markdown';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css'; // 必须引入这个样式文件，公式才好看！
 
 interface QuestionData {
   题号: string;
@@ -114,14 +119,16 @@ export default function Home() {
               </span>
             </div>
 
-            <div className="mb-4">
-              <span className="font-semibold text-gray-600 block mb-1">📝 题目：</span>
-              <p className="bg-gray-50 p-3 rounded text-gray-800 font-mono text-sm whitespace-pre-wrap">{item.题目}</p >
-            </div>
+           <div className="bg-gray-50 p-3 rounded text-gray-800 text-sm whitespace-pre-wrap">
+              <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                {item.题目}
+              </ReactMarkdown>
+           </div>
 
-            <div>
-              <span className="font-semibold text-gray-600 block mb-1">✍️ 学生作答：</span>
-              <p className="bg-gray-50 p-3 rounded text-gray-800 font-mono text-sm whitespace-pre-wrap">{item.学生作答}</p >
+            <div className="bg-gray-50 p-3 rounded text-gray-800 text-sm whitespace-pre-wrap">
+              <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                {item.学生作答}
+              </ReactMarkdown>
             </div>
 
             {/* 第二步：批改按钮 */}
