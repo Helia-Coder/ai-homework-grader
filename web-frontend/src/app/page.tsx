@@ -1,10 +1,9 @@
 "use client";
 import { useState } from 'react';
-// 新增的 Markdown 和公式渲染依赖
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import 'katex/dist/katex.min.css'; // 必须引入这个样式文件，公式才好看！
+import 'katex/dist/katex.min.css';
 
 interface QuestionData {
   题号: string;
@@ -14,51 +13,68 @@ interface QuestionData {
 }
 
 export default function Home() {
-  const [image, setImage] = useState<string | null>(null);
+  const [images, setImages] = useState<string[]>([]);
   const [results, setResults] = useState<QuestionData[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // 新增：用于管理每道题的批改状态和结果
   const [evaluatingIndex, setEvaluatingIndex] = useState<number | null>(null);
-  const [evalResults, setEvalResults] = useState<Record<number, any>>({});
+  const [evalResults, setEvalResults] = useState<Record<number, string>>({});
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      setImage(event.target?.result as string);
-    };
-    reader.readAsDataURL(file);
-    // 重置状态
-    setResults([]);
-    setEvalResults({});
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    const fileArray = Array.from(files);
+
+    Promise.all(fileArray.map(file => {
+      return new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (event) => resolve(event.target?.result as string);
+        reader.readAsDataURL(file);
+      });
+    })).then(base64Images => {
+      setImages(prev => [...prev, ...base64Images]);
+    });
+
+    e.target.value = ""; // 允许重复选择同一张图
   };
 
   const handleSubmit = async () => {
-    if (!image) return;
+    if (images.length === 0) return;
     setLoading(true);
     setResults([]);
     setEvalResults({});
 
+    let allParsedData: any[] = [];
+
     try {
-      const response = await fetch('/api/grade', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ img_b64: image })
-      });
+      // 排队识别每一张图
+      for (let i = 0; i < images.length; i++) {
+        const response = await fetch('/api/grade', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ img_b64: images[i] })
+        });
 
-      if (!response.ok) throw new Error(`服务器报错: ${response.status}`);
-      const data = await response.json();
+        if (!response.ok) throw new Error(`第 ${i+1} 张图服务器报错`);
+        const data = await response.json();
 
-      try {
         const cleanJsonStr = data.result.replace(/```json/g, '').replace(/```/g, '').trim();
         const parsedData = JSON.parse(cleanJsonStr);
-        setResults(Array.isArray(parsedData) ? parsedData : [parsedData]);
-      } catch (e) {
-        console.error("JSON 解析失败", e);
-        alert("AI 返回的格式不对，请重试");
+
+        if (Array.isArray(parsedData)) {
+          allParsedData = [...allParsedData, ...parsedData];
+        } else {
+          allParsedData.push(parsedData);
+        }
       }
+
+      const renumberedData = allParsedData.map((item, index) => ({
+        ...item,
+        题号: (index + 1).toString()
+      }));
+
+      setResults(renumberedData);
     } catch (error: any) {
       alert(`出错了: ${error.message}`);
     } finally {
@@ -66,20 +82,56 @@ export default function Home() {
     }
   };
 
-  // 新增：单题批改函数
   const handleEvaluate = async (index: number, question: string, answer: string) => {
     setEvaluatingIndex(index);
+    setEvalResults(prev => ({ ...prev, [index]: "" }));
+
     try {
       const res = await fetch('/api/evaluate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question, answer })
       });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
 
-      const cleanStr = data.result.replace(/```json/g, '').replace(/```/g, '').trim();
-      setEvalResults(prev => ({ ...prev, [index]: JSON.parse(cleanStr) }));
+      if (!res.body) throw new Error("没有返回数据流");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let done = false;
+      let fullText = "";
+      let buffer = ""; // 新增：用来存不完整的碎片
+
+      while (!done) {
+        const { value, done: readerDone } = await reader.read();
+        done = readerDone;
+        if (value) {
+          // 把新收到的数据加到缓冲池里
+          buffer += decoder.decode(value, { stream: true });
+
+          // 按换行符切分
+          const lines = buffer.split('\n');
+
+          // 最后一段可能是不完整的，先拿出来放回 buffer，等下一次数据来拼上
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            const trimmedLine = line.trim();
+            if (trimmedLine.startsWith('data: ') && trimmedLine !== 'data: [DONE]') {
+              try {
+                const data = JSON.parse(trimmedLine.slice(6));
+                const content = data.choices[0]?.delta?.content || "";
+                if (content) {
+                  fullText += content;
+                  // 实时更新到页面，触发打字机效果
+                  setEvalResults(prev => ({ ...prev, [index]: fullText }));
+                }
+              } catch (e) {
+                console.error("解析单个数据块失败:", e, trimmedLine);
+              }
+            }
+          }
+        }
+      }
     } catch (err: any) {
       alert(`批改失败: ${err.message}`);
     } finally {
@@ -88,20 +140,45 @@ export default function Home() {
   };
 
   return (
-    <main className="min-h-screen bg-gray-100 p-8 flex flex-col items-center">
-      <h1 className="text-3xl font-bold text-gray-800 mb-8">AI 多模态作业批改助手</h1>
+    <main className="min-h-screen bg-gray-100 p-4 md:p-8 flex flex-col items-center">
+      <h1 className="text-2xl md:text-3xl font-bold text-gray-800 mb-2">AI 多模态作业批改助手</h1>
+      <p className="text-gray-500 mb-8 text-sm">💡 支持多图上传与自动切题，拍照交作业，秒出分步批改。</p >
 
       <div className="bg-white p-6 rounded-xl shadow-lg w-full max-w-lg mb-8">
-        <input type="file" accept="image/*" onChange={handleImageUpload} className="mb-4 w-full" />
-        {image && (
-          < img src={image} alt="Preview" className="w-full h-auto mb-4 rounded-lg shadow-sm border" />
+        {/* 唯一的、纯净的上传框 */}
+        <input
+          type="file"
+          accept="image/*"
+          multiple
+          capture="environment"
+          onChange={handleImageUpload}
+          className="mb-4 w-full file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
+        />
+
+        {/* 缩略图列表 */}
+        {images.length > 0 && (
+          <div className="flex flex-wrap gap-3 mb-6 p-3 bg-gray-50 rounded-lg border">
+            {images.map((img, idx) => (
+              <div key={idx} className="relative">
+                < img src={img} alt="Preview" className="w-20 h-20 md:w-24 md:h-24 object-cover rounded shadow-sm border border-gray-200" />
+                <button
+                  onClick={() => setImages(prev => prev.filter((_, i) => i !== idx))}
+                  className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs hover:bg-red-600 shadow"
+                  title="删除这张"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
         )}
+
         <button
           onClick={handleSubmit}
-          disabled={!image || loading}
+          disabled={images.length === 0 || loading}
           className="w-full bg-blue-600 text-white font-semibold py-3 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 transition-colors"
         >
-          {loading ? "正在识别题目..." : "第一步：识别题目"}
+          {loading ? "Agent 正在识别与切题..." : "第一步：开始识别"}
         </button>
       </div>
 
@@ -119,37 +196,36 @@ export default function Home() {
               </span>
             </div>
 
-           <div className="bg-gray-50 p-3 rounded text-gray-800 text-sm whitespace-pre-wrap">
-              <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
-                {item.题目}
-              </ReactMarkdown>
-           </div>
-
-            <div className="bg-gray-50 p-3 rounded text-gray-800 text-sm whitespace-pre-wrap">
-              <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
-                {item.学生作答}
-              </ReactMarkdown>
+            <div className="mb-4">
+              <span className="font-semibold text-gray-600 block mb-1">📝 题目：</span>
+              <div className="bg-gray-50 p-3 rounded text-gray-800 text-sm whitespace-pre-wrap">
+                <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{item.题目}</ReactMarkdown>
+              </div>
             </div>
 
-            {/* 第二步：批改按钮 */}
+            <div>
+              <span className="font-semibold text-gray-600 block mb-1">✍️ 学生作答：</span>
+              <div className="bg-gray-50 p-3 rounded text-gray-800 text-sm whitespace-pre-wrap">
+                <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{item.学生作答}</ReactMarkdown>
+              </div>
+            </div>
+
             <div className="mt-6 border-t pt-4">
               <button
                 onClick={() => handleEvaluate(index, item.题目, item.学生作答)}
                 disabled={evaluatingIndex === index}
                 className="bg-green-600 text-white px-6 py-2 rounded-lg font-medium shadow hover:bg-green-700 disabled:bg-gray-400 transition-colors"
               >
-                {evaluatingIndex === index ? "AI 正在批改中..." : "✨ 让 AI 批改这道题"}
+                {evaluatingIndex === index ? "AI 正在深度批改中..." : "✨ 让 AI 批改这道题"}
               </button>
 
-              {/* 批改结果展示区 */}
+              {/* 流式渲染批改结果 */}
               {evalResults[index] && (
                 <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg animate-fade-in">
-                  <h3 className="text-2xl font-bold text-green-800 mb-2">
-                    {evalResults[index].得分} <span className="text-base font-normal text-gray-500">/ {evalResults[index].满分} 分</span>
-                  </h3>
-                  <div className="space-y-2 mt-3">
-                    <p className="text-gray-800 text-sm leading-relaxed"><strong className="text-red-600">❌ 错因归因：</strong> {evalResults[index].错因归因}</p >
-                    <p className="text-gray-800 text-sm leading-relaxed"><strong className="text-blue-600">💡 讲评建议：</strong> {evalResults[index].讲评建议}</p >
+                  <div className="prose prose-green max-w-none text-gray-800">
+                    <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                      {evalResults[index]}
+                    </ReactMarkdown>
                   </div>
                 </div>
               )}
