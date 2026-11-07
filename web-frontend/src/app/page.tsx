@@ -13,6 +13,8 @@ interface QuestionData {
 }
 
 export default function Home() {
+  // --- 状态定义 ---
+  const [role, setRole] = useState<'student' | 'teacher' | null>(null); // 新增：身份状态
   const [images, setImages] = useState<string[]>([]);
   const [results, setResults] = useState<QuestionData[]>([]);
   const [loading, setLoading] = useState(false);
@@ -20,12 +22,11 @@ export default function Home() {
   const [evaluatingIndex, setEvaluatingIndex] = useState<number | null>(null);
   const [evalResults, setEvalResults] = useState<Record<number, string>>({});
 
+  // --- 逻辑函数 ---
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
-
     const fileArray = Array.from(files);
-
     Promise.all(fileArray.map(file => {
       return new Promise<string>((resolve) => {
         const reader = new FileReader();
@@ -35,8 +36,7 @@ export default function Home() {
     })).then(base64Images => {
       setImages(prev => [...prev, ...base64Images]);
     });
-
-    e.target.value = ""; // 允许重复选择同一张图
+    e.target.value = "";
   };
 
   const handleSubmit = async () => {
@@ -44,21 +44,17 @@ export default function Home() {
     setLoading(true);
     setResults([]);
     setEvalResults({});
-
     let allParsedData: any[] = [];
 
     try {
-      // 排队识别每一张图
       for (let i = 0; i < images.length; i++) {
         const response = await fetch('/api/grade', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ img_b64: images[i] })
         });
-
         if (!response.ok) throw new Error(`第 ${i+1} 张图服务器报错`);
         const data = await response.json();
-
         const cleanJsonStr = data.result.replace(/```json/g, '').replace(/```/g, '').trim();
         const parsedData = JSON.parse(cleanJsonStr);
 
@@ -73,7 +69,6 @@ export default function Home() {
         ...item,
         题号: (index + 1).toString()
       }));
-
       setResults(renumberedData);
     } catch (error: any) {
       alert(`出错了: ${error.message}`);
@@ -85,33 +80,26 @@ export default function Home() {
   const handleEvaluate = async (index: number, question: string, answer: string) => {
     setEvaluatingIndex(index);
     setEvalResults(prev => ({ ...prev, [index]: "" }));
-
     try {
       const res = await fetch('/api/evaluate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question, answer })
       });
-
       if (!res.body) throw new Error("没有返回数据流");
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let done = false;
       let fullText = "";
-      let buffer = ""; // 新增：用来存不完整的碎片
+      let buffer = "";
 
       while (!done) {
         const { value, done: readerDone } = await reader.read();
         done = readerDone;
         if (value) {
-          // 把新收到的数据加到缓冲池里
           buffer += decoder.decode(value, { stream: true });
-
-          // 按换行符切分
           const lines = buffer.split('\n');
-
-          // 最后一段可能是不完整的，先拿出来放回 buffer，等下一次数据来拼上
           buffer = lines.pop() || "";
 
           for (const line of lines) {
@@ -122,12 +110,9 @@ export default function Home() {
                 const content = data.choices[0]?.delta?.content || "";
                 if (content) {
                   fullText += content;
-                  // 实时更新到页面，触发打字机效果
                   setEvalResults(prev => ({ ...prev, [index]: fullText }));
                 }
-              } catch (e) {
-                console.error("解析单个数据块失败:", e, trimmedLine);
-              }
+              } catch (e) {}
             }
           }
         }
@@ -139,13 +124,70 @@ export default function Home() {
     }
   };
 
+  // ==========================================
+  // 页面渲染部分：根据 role 状态展示不同页面
+  // ==========================================
+
+  // 1. 角色选择页（欢迎页）
+  if (!role) {
+    return (
+      <main className="min-h-screen bg-gray-100 flex flex-col items-center justify-center p-4">
+        <h1 className="text-4xl font-bold text-gray-800 mb-4">AI 多模态作业批改 Agent</h1>
+        <p className="text-gray-500 mb-10">请选择您的身份进入系统（演示环境免密）</p >
+        <div className="flex flex-col md:flex-row gap-6">
+          <button
+            onClick={() => setRole('student')}
+            className="bg-blue-600 text-white px-10 py-8 rounded-2xl shadow-lg hover:bg-blue-700 transition transform hover:scale-105"
+          >
+            <div className="text-3xl mb-2">👦</div>
+            <div className="text-xl font-bold">我是学生</div>
+            <div className="text-sm opacity-80">拍照交作业，秒出批改</div>
+          </button>
+
+          <button
+            onClick={() => setRole('teacher')}
+            className="bg-green-600 text-white px-10 py-8 rounded-2xl shadow-lg hover:bg-green-700 transition transform hover:scale-105"
+          >
+            <div className="text-3xl mb-2">👩‍🏫</div>
+            <div className="text-xl font-bold">我是老师</div>
+            <div className="text-sm opacity-80">查看班级学情与共性错因</div>
+          </button>
+        </div>
+      </main>
+    );
+  }
+
+  // 2. 教师端页面（留给队友做图表的地方）
+  if (role === 'teacher') {
+    return (
+      <main className="min-h-screen bg-gray-100 p-8 flex flex-col items-center">
+        <div className="w-full max-w-5xl flex justify-between items-center mb-8">
+          <h1 className="text-3xl font-bold text-gray-800">👩‍🏫 教师学情看板</h1>
+          <button onClick={() => setRole(null)} className="text-blue-600 font-medium hover:underline">退出/切换身份</button>
+        </div>
+
+        {/* 给队友的舞台 */}
+        <div className="bg-white p-10 rounded-xl shadow-lg w-full max-w-5xl flex flex-col items-center justify-center min-h-[400px] border-2 border-dashed border-gray-300">
+          <h2 className="text-xl text-gray-400">📊 班级知识点掌握热力图与共性错因开发中...</h2>
+          <p className="text-sm text-gray-400 mt-2">（队友可以在这里引入 ECharts，读取本地批改记录展示）</p >
+        </div>
+      </main>
+    );
+  }
+
+  // 3. 学生端页面（你原来写的代码都在这里！）
   return (
     <main className="min-h-screen bg-gray-100 p-4 md:p-8 flex flex-col items-center">
-      <h1 className="text-2xl md:text-3xl font-bold text-gray-800 mb-2">AI 多模态作业批改助手</h1>
-      <p className="text-gray-500 mb-8 text-sm">💡 支持多图上传与自动切题，拍照交作业，秒出分步批改。</p >
+      <div className="w-full max-w-4xl flex justify-between items-center mb-6">
+        <div>
+          <h1 className="text-2xl md:text-3xl font-bold text-gray-800">👦 学生端：作业批改助手</h1>
+          <p className="text-gray-500 text-sm mt-1">💡 支持多图上传与自动切题</p >
+        </div>
+        <button onClick={() => setRole(null)} className="text-blue-600 font-medium hover:underline">切换身份</button>
+      </div>
 
+      {/* 这里是你的上传卡片 */}
       <div className="bg-white p-6 rounded-xl shadow-lg w-full max-w-lg mb-8">
-        {/* 唯一的、纯净的上传框 */}
         <input
           type="file"
           accept="image/*"
@@ -155,7 +197,6 @@ export default function Home() {
           className="mb-4 w-full file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
         />
 
-        {/* 缩略图列表 */}
         {images.length > 0 && (
           <div className="flex flex-wrap gap-3 mb-6 p-3 bg-gray-50 rounded-lg border">
             {images.map((img, idx) => (
@@ -164,7 +205,6 @@ export default function Home() {
                 <button
                   onClick={() => setImages(prev => prev.filter((_, i) => i !== idx))}
                   className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs hover:bg-red-600 shadow"
-                  title="删除这张"
                 >
                   ✕
                 </button>
@@ -182,6 +222,7 @@ export default function Home() {
         </button>
       </div>
 
+      {/* 这里是题目卡片渲染区域 */}
       <div className="w-full max-w-4xl space-y-6">
         {results.map((item, index) => (
           <div key={index} className="bg-white p-6 rounded-xl shadow-md border-l-4 border-blue-500">
@@ -219,7 +260,6 @@ export default function Home() {
                 {evaluatingIndex === index ? "AI 正在深度批改中..." : "✨ 让 AI 批改这道题"}
               </button>
 
-              {/* 流式渲染批改结果 */}
               {evalResults[index] && (
                 <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg animate-fade-in">
                   <div className="prose prose-green max-w-none text-gray-800">
