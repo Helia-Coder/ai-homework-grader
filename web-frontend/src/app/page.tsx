@@ -74,6 +74,8 @@ async function compressImage(file: File, maxWidth = 1024, quality = 0.75): Promi
 
 export default function Home() {
   const [role, setRole] = useState<'student' | 'teacher' | null>(null);
+  // 新增：控制大图预览的状态
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [images, setImages] = useState<string[]>([]);
   const [results, setResults] = useState<BigQuestionData[]>([]);
   const [loading, setLoading] = useState(false);
@@ -258,14 +260,23 @@ export default function Home() {
           <div className="flex flex-wrap gap-3 mt-6 p-3 bg-gray-50 rounded-xl border border-gray-200">
             {images.map((img, idx) => (
               <div key={idx} className="relative group">
-                <img src={img} alt="Preview" className="w-20 h-20 md:w-24 md:h-24 object-cover rounded-lg shadow-sm border border-gray-200" />
-                <button
-                  onClick={() => setImages(prev => prev.filter((_, i) => i !== idx))}
-                  className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs hover:bg-red-600 shadow opacity-0 group-hover:opacity-100 transition-opacity"
-                >
-                  ✕
-                </button>
-              </div>
+                {/* 修改了这里：加了 onClick 和 cursor-pointer */}
+                < img
+                    src={img}
+                    alt="Preview"
+                    onClick={() => setPreviewImage(img)}
+                    className="w-20 h-20 md:w-24 md:h-24 object-cover rounded-lg shadow-sm border border-gray-200 cursor-pointer hover:opacity-80 transition-opacity"
+                  />
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation(); // 防止点删除时触发大图预览
+                      setImages(prev => prev.filter((_, i) => i !== idx));
+                    }}
+                    className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs hover:bg-red-600 shadow opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    ✕
+                  </button>
+                </div>
             ))}
           </div>
         )}
@@ -424,6 +435,28 @@ export default function Home() {
           </div>
         ))}
       </div>
+      {/* 新增：全屏大图预览弹窗 */}
+      {previewImage && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm cursor-zoom-out"
+          onClick={() => setPreviewImage(null)}
+        >
+          <div className="relative max-w-4xl max-h-[90vh]">
+            < img
+              src={previewImage}
+              alt="Full Preview"
+              className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl"
+            />
+            <button
+              onClick={() => setPreviewImage(null)}
+              className="absolute -top-4 -right-4 bg-white text-gray-800 rounded-full w-10 h-10 flex items-center justify-center font-bold text-lg shadow-lg hover:bg-gray-200 transition-colors"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
     </main>
+
   );
 }
