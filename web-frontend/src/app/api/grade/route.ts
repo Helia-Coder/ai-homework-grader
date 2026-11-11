@@ -1,29 +1,10 @@
-// web-frontend/src/app/api/grade/route.ts
 import { NextResponse } from 'next/server';
+import { chatCompletion, GRADE_MODEL } from '@/lib/dashscope';
+import { parseGradingResult } from '@/lib/grading-parser';
 
-export async function POST(request: Request) {
-  try {
-    console.log("【grade】收到POST请求");
-    const body = await request.json();
-    console.log("【grade】收到图片base64（省略长串内容）");
-    const { img_b64 } = body;
+export const maxDuration = 120;
 
-    if (!img_b64) {
-      console.log("【grade】缺少img_b64");
-      return NextResponse.json({ error: '没有收到图片base64' }, { status: 400 });
-    }
-
-    const apiKey = process.env.DASHSCOPE_API_KEY;
-    if (!apiKey) {
-      console.log("【grade】DASHSCOPE_API_KEY环境变量为空");
-      return NextResponse.json({ error: '未配置 API Key' }, { status: 500 });
-    }
-    console.log("【grade】apiKey已读取");
-
-    const url = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
-    console.log("【grade】请求上游地址：", url);
-
-    const prompt = `你是一个专业的数理化作业批改助手。
+const PROMPT = `你是一个专业的数理化作业批改助手。
 请仔细查看整张图片，找到图片内所有大题，识别大题以及大题下面的各个小问，全部识别出来，一个小问都不能漏掉。
 【题型区分规则】
 1. 选择题：识别题干、A/B/C/D全部选项，学生手写选择答案。学生如果手写演算草稿过程，草稿仅用来辅助判断最终答案对错，草稿不单独分步打分。**不拆分步骤分，整题统一判定**。答对拿本小问满分，答错给0分，步骤明细写空数组[]。
@@ -47,9 +28,9 @@ export async function POST(request: Request) {
 ⚠️重要规则：
 1. 错因归因、讲评建议这两个字段**绝对不能为空**
 2. 如果学生答案错误：错因归因写清楚错在哪一步、概念哪里理解错；讲评建议写对应的知识点和练习方向
-3. 如果学生答案正确：错因归因填“作答正确，无错误”，讲评建议填“掌握良好，继续保持”
+3. 如果学生答案正确：错因归因填"作答正确，无错误"，讲评建议填"掌握良好，继续保持"
 4. 严格输出JSON，字段不能少，不能留白
-输出JSON里所有LaTeX公式的反斜杠必须写双反斜杠\\\\，禁止单独的\；不要换行、不要多余注释、不要markdown代码块，只输出纯净JSON数组。
+输出JSON里所有LaTeX公式的反斜杠必须写双反斜杠\\\\，禁止单独的\\；不要换行、不要多余注释、不要markdown代码块，只输出纯净JSON数组。
 严格按以下JSON数组格式输出：
 [
   {
@@ -62,9 +43,10 @@ export async function POST(request: Request) {
       {
         "小问编号": "(1)",
         "小问题干": "提取(1)的题干内容，公式用 LaTeX 格式",
-        "选项内容": "A.xxx B.xxx shtur D.xxx",
+        "选项内容": "A.xxx B.xxx C.xxx D.xxx",
         "学生作答": "学生选的答案，如B",
         "本小问满分": "5",
+        "本小问学生得分": "5",
         "评分细则": "选择题：选对得5分，选错得0分，演算草稿仅辅助判断答案",
         "步骤明细": [],
         "错因归因": "选错答案",
@@ -76,6 +58,7 @@ export async function POST(request: Request) {
         "选项内容": "",
         "学生作答": "学生填写的答案",
         "本小问满分": "5",
+        "本小问学生得分": "5",
         "评分细则": "填空题：答案正确得5分，错误得0分，演算草稿仅辅助判断答案",
         "步骤明细": [],
         "错因归因": "答案填写错误",
@@ -87,6 +70,7 @@ export async function POST(request: Request) {
         "选项内容": "",
         "学生作答": "提取学生本小问手写内容，公式用 LaTeX 格式",
         "本小问满分": "6",
+        "本小问学生得分": "6",
         "评分细则": "写明本小问满分，写明每一步分值、扣分规则",
         "步骤明细": [
           {
@@ -104,48 +88,50 @@ export async function POST(request: Request) {
   }
 ]
 `;
-   const data = {
-      model: "qwen3.7-plus",
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "image_url", image_url: { url: img_b64 } },
-            { type: "text", text: prompt }
-          ]
-        }
-      ]
-    };
-    console.log("【grade】组装请求完成，模型：", data.model);
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(data)
-    });
+export async function POST(request: Request) {
+  try {
+    const body = await request.json().catch(() => ({}));
+    const img_b64 = body?.img_b64;
 
-    console.log("【grade】上游response.status：", response.status);
-    const errText = await response.text();
-
-    if (!response.ok) {
-      throw new Error(`上游接口错误，状态码: ${response.status}`);
+    if (!img_b64 || typeof img_b64 !== 'string') {
+      return NextResponse.json({ error: '没有收到图片base64' }, { status: 400 });
     }
 
-    const result = JSON.parse(errText);
-    let content = result.choices?.[0]?.message?.content ?? "";
+    const content = await chatCompletion(
+      [
+        {
+          role: 'user',
+          content: [
+            { type: 'image_url', image_url: { url: img_b64 } },
+            { type: 'text', text: PROMPT },
+          ],
+        },
+      ],
+      GRADE_MODEL
+    );
 
-    // 清洗逻辑
-    content = content.replace(/```json/g, "").replace(/```/g, "").trim();
-    content = content.replace(/(?<!\\)\\(?!\\)/g, "\\\\");
-    content = content.replace(/[\x00-\x1F]/g, "");
+    if (!content || !content.trim()) {
+      return NextResponse.json(
+        { error: '模型未返回内容，请重试' },
+        { status: 502 }
+      );
+    }
 
-    // ✅ 只做清洗，不提前JSON.parse！直接返回字符串给前端！
-    return NextResponse.json({ result: content });
-  } catch (error: any) {
-    console.error('【grade】异常：', error.message);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    const parsed = parseGradingResult(content);
+
+    if (!Array.isArray(parsed)) {
+      return NextResponse.json(
+        { error: '批改结果格式异常，请重试' },
+        { status: 502 }
+      );
+    }
+
+    // 保留 result，以防万一有其他地方用
+    return NextResponse.json({ result: content, data: parsed });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '未知错误';
+    console.error('[grade] 异常：', message);
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

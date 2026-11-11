@@ -1,84 +1,178 @@
-// web-frontend/src/app/api/submitRecord/route.ts
 import { NextResponse } from 'next/server';
+import {
+  addRecord,
+  deleteRecord,
+  getRecordById,
+  getRecordSummaries,
+  updateRecord,
+} from '@/lib/store';
+import type { BigQuestionData, SubmitRecord } from '@/lib/types';
 
-type RecordItem = {
-  id: string;
-  studentName: string;
-  submitTime: string;
-  imgList: string[]; // 适配前端：多图数组，不是单个img_b64
-  questionList: any[];
-  isReviewed: boolean;
-  teacherComment: string;
-};
-
-// 内存存储（重启服务数据清空，适合课程作业演示）
-let records: RecordItem[] = [];
-
-// GET：读取全部记录
-export async function GET() {
-  return NextResponse.json(records);
+function isNonEmptyString(v: unknown): v is string {
+  return typeof v === 'string' && v.trim().length > 0;
 }
 
-// POST：新增一条提交记录
+function isValidQuestionList(v: unknown): v is BigQuestionData[] {
+  if (!Array.isArray(v)) return false;
+  return v.every(
+    (q) =>
+      q &&
+      typeof q === 'object' &&
+      Array.isArray((q as BigQuestionData).小问列表)
+  );
+}
+
+export async function GET(req: Request) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const id = searchParams.get('id');
+
+    if (id) {
+      const record = await getRecordById(id);
+      if (!record) {
+        return NextResponse.json({ error: '找不到这条记录' }, { status: 404 });
+      }
+      return NextResponse.json(record);
+    }
+
+    const summaries = await getRecordSummaries();
+    return NextResponse.json(summaries);
+  } catch (e) {
+    console.error('[submitRecord] GET 异常：', e);
+    return NextResponse.json({ error: '读取记录失败' }, { status: 500 });
+  }
+}
+
 export async function POST(req: Request) {
   try {
-    const payload = await req.json();
-    records.push(payload);
-    return NextResponse.json({ ok: true });
+    const payload = await req.json().catch(() => null);
+    if (!payload || typeof payload !== 'object') {
+      return NextResponse.json({ error: '请求体格式错误' }, { status: 400 });
+    }
+
+    if (!isNonEmptyString(payload?.studentName)) {
+      return NextResponse.json({ error: '缺少学生姓名' }, { status: 400 });
+    }
+    if (!isValidQuestionList(payload?.questionList)) {
+      return NextResponse.json({ error: '批改结果格式不正确' }, { status: 400 });
+    }
+    if (!Array.isArray(payload?.imgList)) {
+      return NextResponse.json({ error: '缺少作业原图' }, { status: 400 });
+    }
+
+    const record = await addRecord({
+      studentName: payload.studentName.trim(),
+      submitTime: isNonEmptyString(payload.submitTime)
+        ? payload.submitTime
+        : new Date().toLocaleString('zh-CN'),
+      imgList: payload.imgList,
+      questionList: payload.questionList as BigQuestionData[],
+      isReviewed: payload.isReviewed === true,
+      teacherComment:
+        typeof payload.teacherComment === 'string' ? payload.teacherComment : '',
+    });
+
+    return NextResponse.json({ ok: true, success: true, id: record.id });
   } catch (e) {
+    console.error('[submitRecord] POST 异常：', e);
     return NextResponse.json({ error: '保存记录失败' }, { status: 500 });
   }
 }
 
-// PATCH：修改评语、复核状态（保留原有，兼容旧调用）
-export async function PATCH(req: Request) {
-  try {
-    const { id, teacherComment, isReviewed } = await req.json();
-    if (!id) {
-      return NextResponse.json({ error: '缺少记录id' }, { status: 400 });
-    }
-    const target = records.find(r => r.id === id);
-    if (!target) {
-      return NextResponse.json({ error: '找不到这条记录' }, { status: 404 });
-    }
-    target.teacherComment = teacherComment ?? "";
-    target.isReviewed = isReviewed ?? true;
-    return NextResponse.json({ ok: true });
-  } catch (err) {
-    console.error("patch error", err);
-    return NextResponse.json({ error: '更新失败' }, { status: 500 });
-  }
-}
-
-// ✅ 新增 PUT：适配前端保存复核（修改questionList、评语、复核状态）
 export async function PUT(req: Request) {
   try {
-    const { id, questionList, teacherComment, isReviewed } = await req.json();
-    if (!id) {
+    const body = await req.json().catch(() => null);
+    if (!body || typeof body !== 'object') {
+      return NextResponse.json({ error: '请求体格式错误' }, { status: 400 });
+    }
+
+    const { id, questionList, teacherComment, isReviewed } = body;
+
+    if (!isNonEmptyString(id)) {
       return NextResponse.json({ error: '缺少记录id' }, { status: 400 });
     }
-    const target = records.find(r => r.id === id);
-    if (!target) {
+
+    const patch: Partial<SubmitRecord> = {};
+    if (questionList !== undefined) {
+      if (!isValidQuestionList(questionList)) {
+        return NextResponse.json(
+          { error: 'questionList 格式不正确' },
+          { status: 400 }
+        );
+      }
+      patch.questionList = questionList as BigQuestionData[];
+    }
+    if (teacherComment !== undefined) {
+      patch.teacherComment =
+        typeof teacherComment === 'string' ? teacherComment : '';
+    }
+    if (typeof isReviewed === 'boolean') {
+      patch.isReviewed = isReviewed;
+    }
+
+    const updated = await updateRecord(id, patch);
+    if (!updated) {
       return NextResponse.json({ error: '找不到这条记录' }, { status: 404 });
     }
-    // 赋值更新
-    if (questionList !== undefined) target.questionList = questionList;
-    if (teacherComment !== undefined) target.teacherComment = teacherComment;
-    if (isReviewed !== undefined) target.isReviewed = isReviewed;
-    return NextResponse.json({ ok: true });
-  } catch (err) {
-    console.error("put error", err);
+
+    return NextResponse.json({ ok: true, id: updated.id });
+  } catch (e) {
+    console.error('[submitRecord] PUT 异常：', e);
     return NextResponse.json({ error: '更新失败' }, { status: 500 });
   }
 }
 
-// DELETE：删除记录
+// 保留 PATCH 以防万一
+export async function PATCH(req: Request) {
+  try {
+    const body = await req.json().catch(() => null);
+    if (!body || typeof body !== 'object') {
+      return NextResponse.json({ error: '请求体格式错误' }, { status: 400 });
+    }
+
+    const { id, teacherComment, isReviewed } = body;
+
+    if (!isNonEmptyString(id)) {
+      return NextResponse.json({ error: '缺少记录id' }, { status: 400 });
+    }
+
+    const patch: Partial<SubmitRecord> = {};
+    if (teacherComment !== undefined) {
+      patch.teacherComment =
+        typeof teacherComment === 'string' ? teacherComment : '';
+    }
+    if (typeof isReviewed === 'boolean') {
+      patch.isReviewed = isReviewed;
+    }
+
+    const updated = await updateRecord(id, patch);
+    if (!updated) {
+      return NextResponse.json({ error: '找不到这条记录' }, { status: 404 });
+    }
+
+    return NextResponse.json({ ok: true, id: updated.id });
+  } catch (e) {
+    console.error('[submitRecord] PATCH 异常：', e);
+    return NextResponse.json({ error: '更新失败' }, { status: 500 });
+  }
+}
+
 export async function DELETE(req: Request) {
   try {
-    const { id } = await req.json();
-    records = records.filter(r => r.id !== id);
+    const body = await req.json().catch(() => null);
+    const id = body?.id;
+    if (!isNonEmptyString(id)) {
+      return NextResponse.json({ error: '缺少记录id' }, { status: 400 });
+    }
+
+    const removed = await deleteRecord(id);
+    if (!removed) {
+      return NextResponse.json({ error: '找不到这条记录' }, { status: 404 });
+    }
+
     return NextResponse.json({ ok: true });
   } catch (e) {
+    console.error('[submitRecord] DELETE 异常：', e);
     return NextResponse.json({ error: '删除失败' }, { status: 500 });
   }
 }
