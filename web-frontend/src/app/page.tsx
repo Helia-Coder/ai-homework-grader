@@ -598,8 +598,8 @@ export default function Home() {
       record => {
         const big = record.questionList[bigIndex];
         const target = big.小问列表[subIndex];
-        target.本小问满分 = newMax;
-        target.本小问学生得分 = newScore;
+        target.本小问满分 = newMax.toString();
+        target.本小问学生得分 = newScore.toString();
         target.错因归因 = sub.错因归因;
         target.讲评建议 = sub.讲评建议;
         if (sub.步骤明细) target.步骤明细 = JSON.parse(JSON.stringify(sub.步骤明细));
