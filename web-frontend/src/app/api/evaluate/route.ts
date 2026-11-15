@@ -1,17 +1,33 @@
 import { NextResponse } from 'next/server';
 import { chatCompletionStream, EVALUATE_MODEL } from '@/lib/dashscope';
+import rules from '@/lib/rules.json';
 
 export const maxDuration = 120;
 
 function buildPrompt(question: string, answer: string): string {
+  // 1. 极简 RAG 检索：根据题目特征匹配规则
+  let rulePrompt = (rules as any)["通用"] || "【评分细则】按步骤踩点给分，逻辑跳跃酌情扣分。";
+
+  if (question.includes("方程") || question.includes("=") || question.includes("x")) {
+    rulePrompt = (rules as any)["方程"];
+  } else if (question.includes("证明") || question.includes("三角") || question.includes("形")) {
+    rulePrompt = (rules as any)["几何"];
+  } else if (question.includes("函数") || question.includes("f(x)")) {
+    rulePrompt = (rules as any)["函数"];
+  }
+
+  // 2. 将检索到的规则拼接到 Prompt 中
   return `你是经验丰富的初中数理化任课老师。
-现在给到你的是一道包含多个小问的大题（包含大题题干 + 全部小问的题干和学生作答）。
+
+${rulePrompt}  <--- 这是检索到的专属评分标准，请严格遵循！
+
+现在给到你的是包含多个小问的大题（包含大题干+所有小问的题干和学生作答）。
 请对**整道大题所有小问统一深度讲评**：
-1. 逐个小问分析，分步拆解解题思路；
+1. 逐个分析，分步拆解解题思路；
 2. 标注每一处对错：✅正确，❌错误，⚠️易错提醒；
-3. 指出学生的共性错误、思维漏洞；
-4. 给出标准解题步骤、同类题解题技巧；
-5. 输出使用markdown格式，排版清晰，适合学生阅读。
+3. 指出共性错误、思维漏洞；
+4. 给出标准解题步骤、同类题技巧；
+5. 输出使用 markdown 格式，排版清晰。
 
 题目与作答信息：
 ${question}

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { chatCompletion, GRADE_MODEL } from '@/lib/dashscope';
 import { parseGradingResult } from '@/lib/grading-parser';
+import { validateAndFixScores } from '@/lib/mathTool';
 
 export const maxDuration = 120;
 
@@ -118,17 +119,25 @@ export async function POST(request: Request) {
       );
     }
 
-    const parsed = parseGradingResult(content);
+   // 1. 解析大模型返回的内容
+   const parsed = parseGradingResult(content);
 
-    if (!Array.isArray(parsed)) {
-      return NextResponse.json(
-        { error: '批改结果格式异常，请重试' },
-        { status: 502 }
-      );
-    }
+   if (!Array.isArray(parsed)) {
+     return NextResponse.json(
+       { error: '批改结果格式异常，请重试' },
+       { status: 502 }
+     );
+   }
 
-    // 保留 result，以防万一有其他地方用
-    return NextResponse.json({ result: content, data: parsed });
+   // 2. 🚨 核心：调用刚引入的“原生算分校验工具”！
+   // 因为 parse 出来是个大题数组，我们遍历每个大题，把大模型幻觉强制干掉
+   const fixedData = parsed.map((bigQ: any) => validateAndFixScores(bigQ));
+
+   // 3. 把校准后的数据重新转回字符串，覆盖原来的 content
+   // 这样前端无论读 data.result 还是 data.data，拿到的都是被工具修复过的正确数据
+   const fixedContent = JSON.stringify(fixedData);
+
+   return NextResponse.json({ result: fixedContent, data: fixedData });
   } catch (error) {
     const message = error instanceof Error ? error.message : '未知错误';
     console.error('[grade] 异常：', message);
