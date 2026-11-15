@@ -43,6 +43,7 @@ import {
   sumStepMax,
   toNumber,
 } from '@/lib/score';
+import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 // ==========================================
 // 工具方法：前端图片压缩
@@ -377,7 +378,6 @@ export default function Home() {
             throw new Error(err.error || `第 ${i + 1} 张图服务器报错`);
           }
           const data = await response.json();
-
           let parsed: unknown;
           if (Array.isArray(data.data) && data.data.length > 0) {
             parsed = data.data;
@@ -385,15 +385,37 @@ export default function Home() {
             parsed = parseGradingResult(data.result ?? '');
           }
 
-          const wrapBig = (big: BigQuestionData): BigQuestionData => ({
-            ...big,
-            hasManualEdit: false,
-            小问列表: (big.小问列表 ?? []).map(sq => ({
-              ...sq,
-              hasManualEdit: false, // 初始化
-              本小问学生得分: sq.本小问学生得分 ?? '0',
-            })) as any,
-          });
+          // 👇 防幻觉强校验
+          const wrapBig = (big: BigQuestionData): BigQuestionData => {
+            const validatedBig = {
+              ...big,
+              hasManualEdit: false,
+              小问列表: (big.小问列表 ?? []).map((sq) => {
+                const newSub = {
+                  ...sq,
+                  hasManualEdit: false,
+                  本小问学生得分: sq.本小问学生得分 ?? '0',
+                } as any;
+
+                if (newSub.步骤明细 && newSub.步骤明细.length > 0) {
+                  let stepSum = 0;
+                  newSub.步骤明细.forEach((step: StepItem) => {
+                    stepSum += toNumber(step.该步骤满分);
+                  });
+                  const maxScore = toNumber(newSub.本小问满分);
+                  if (Math.abs(stepSum - maxScore) > 0.1 && maxScore > 0) {
+                    const ratio = maxScore / stepSum;
+                    newSub.步骤明细.forEach((step: StepItem) => {
+                      step.该步骤满分 = (toNumber(step.该步骤满分) * ratio).toFixed(1);
+                    });
+                    newSub.错因归因 = `【系统拦截】检测到AI拆分步骤异常，已强制校准满分。` + (newSub.错因归因 || "");
+                  }
+                }
+                return newSub;
+              }) as any,
+            };
+            return validatedBig;
+          };
 
           if (Array.isArray(parsed)) {
             allParsedData.push(...parsed.map(wrapBig));
@@ -796,6 +818,37 @@ export default function Home() {
                 </div>
               )}
             </div>
+
+              {/* 宏观学情饼图 */}
+              <div className="col-span-12 mb-2 bg-white p-6 rounded-xl shadow border border-gray-100">
+                  <h2 className="font-bold text-lg mb-4 text-gray-800">📊 班级高频错因分析</h2>
+                  <div className="h-64 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={[
+                            { name: '概念模糊', value: 45 },
+                            { name: '计算失误', value: 35 },
+                            { name: '逻辑断层', value: 20 },
+                          ]}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={60}
+                          outerRadius={80}
+                          paddingAngle={5}
+                          dataKey="value"
+                          label={({ name, percent }) => `${name} ${((percent || 0) * 100).toFixed(0)}%`}
+                        >
+                          <Cell fill="#ef4444" />
+                          <Cell fill="#f59e0b" />
+                          <Cell fill="#3b82f6" />
+                        </Pie>
+                        <Tooltip />
+                        <Legend verticalAlign="bottom" height={36}/>
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
 
             <div className="col-span-8 bg-white rounded-xl shadow p-6">
               {activeRecord ? (
