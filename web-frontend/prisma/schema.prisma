@@ -1,0 +1,79 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// 提交记录表（对应 SubmitRecord）
+model Record {
+  id             String   @id @default(cuid())
+  studentName    String
+  submitTime     String
+  isReviewed     Boolean  @default(false)
+  teacherComment String   @db.Text
+  imgList        Json
+
+  questionList   BigQuestion[]
+  createdAt      DateTime @default(now())
+}
+
+// 大题表（对应 BigQuestionData）
+model BigQuestion {
+  id             String   @id @default(cuid())
+  recordId       String
+  record         Record   @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  questionNumber String   // 大题题号
+  stem           String   @db.LongText // 题干
+  totalScore     String   // 总分
+  actualScore    String   // 实得分
+  confidence     String   // 识别置信度
+  hasManualEdit  Boolean  @default(false)
+
+  subQuestions   SubQuestion[]
+}
+
+// 小问表（对应 SubQuestion）
+model SubQuestion {
+  id             String   @id @default(cuid())
+  bigQuestionId  String
+  bigQuestion    BigQuestion @relation(fields: [bigQuestionId], references: [id], onDelete: Cascade)
+
+  subNumber      String   // 小问编号
+  stem           String   @db.LongText // 小问题干
+  studentAnswer  String   @db.LongText // 学生作答
+  optionContent  String?  @db.LongText // 选项
+  maxScore       String   // 本小问满分
+  studentScore   String   // 本小问得分
+  gradingRule    String   @db.LongText // 评分细则
+  errorReason    String   @db.LongText // 错因归因
+  teachingAdvice String   @db.LongText // 讲评建议
+  hasManualEdit  Boolean  @default(false)
+
+  steps          Step[]
+}
+
+// 步骤表（对应 StepItem）
+model Step {
+  id             String   @id @default(cuid())
+  subQuestionId  String
+  subQuestion    SubQuestion @relation(fields: [subQuestionId], references: [id], onDelete: Cascade)
+
+  stepNumber     Int      // 步骤序号
+  maxScore       String   // 该步骤满分
+  actualScore    String   // 实际得分
+  judgment       String   // 判定
+  explanation    String   @db.LongText // 说明
+}
+
+model User {
+  id        String   @id @default(cuid())
+  username  String   @unique // 学号或工号
+  password  String   // 加密后的密码
+  name      String   // 真实姓名
+  role      String   // "student" 或 "teacher"
+  createdAt DateTime @default(now())
+}

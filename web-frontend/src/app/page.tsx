@@ -22,7 +22,9 @@ import {
   Loader2,
   Check,
   AlertTriangle,
+  Trash2,
 } from 'lucide-react';
+import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 import type {
   BigQuestionData,
@@ -43,7 +45,6 @@ import {
   sumStepMax,
   toNumber,
 } from '@/lib/score';
-import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 // ==========================================
 // 工具方法：前端图片压缩
@@ -136,7 +137,6 @@ export default function Home() {
   const activeHistoryIdRef = useRef<string | null>(null);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autosavePendingRef = useRef<SubmitRecord | null>(null);
-  const [selectedSubject, setSelectedSubject] = useState<string>('全部');
 
   // ==========================================
   // 通用 UI 工具函数
@@ -164,7 +164,7 @@ export default function Home() {
   ): { big: Set<string>; sub: Set<string> } => {
     const big = new Set<string>();
     const sub = new Set<string>();
-    questionList.forEach((bigQ, bigIdx) => {
+    (questionList || []).forEach((bigQ, bigIdx) => {
       big.add(`big-${bigIdx}`);
       (bigQ.小问列表 ?? []).forEach((_, subIdx) => {
         sub.add(`sub-${bigIdx}-${subIdx}`);
@@ -253,26 +253,24 @@ export default function Home() {
     };
   }, []);
 
-  // ✅ 补丁：增加 sub.hasManualEdit 标记
   const handleChangeSubStudentScore = (bigIndex: number, subIndex: number, val: string) => {
     updateActiveRecord(record => {
       const big = record.questionList[bigIndex];
       const sub = big.小问列表[subIndex];
       applySubStudentScore(sub, val);
       big.hasManualEdit = true;
-      (sub as any).hasManualEdit = true; // 标记小问被修改
+      (sub as any).hasManualEdit = true;
       recomputeBigScore(big);
     });
   };
 
-  // ✅ 补丁：增加 sub.hasManualEdit 标记
   const handleChangeSubStandardScore = (bigIndex: number, subIndex: number, val: string) => {
     updateActiveRecord(record => {
       const big = record.questionList[bigIndex];
       const sub = big.小问列表[subIndex];
       applySubStandardScore(sub, val);
       big.hasManualEdit = true;
-      (sub as any).hasManualEdit = true; // 标记小问被修改
+      (sub as any).hasManualEdit = true;
       recomputeBigScore(big);
     });
   };
@@ -386,7 +384,6 @@ export default function Home() {
             parsed = parseGradingResult(data.result ?? '');
           }
 
-          // 👇 防幻觉强校验
           const wrapBig = (big: BigQuestionData): BigQuestionData => {
             const validatedBig = {
               ...big,
@@ -442,26 +439,9 @@ export default function Home() {
 
       const safeName = (studentName || '').trim() || '测试学生';
 
-      // 1. 优先看大模型有没有自动识别出来
-      let mainSubject = allParsedData.find((q: any) => q.科目 && q.科目 !== '综合')?.科目;
-
-      // 2. 如果大模型没给，前端开启“关键词兜底猜测”
-      if (!mainSubject) {
-        const allText = allParsedData.map(q => q.大题题干).join(' ');
-        if (allText.includes('证明') || allText.includes('函数') || allText.includes('方程') || allText.includes('几何')) {
-          mainSubject = '数学';
-        } else if (allText.includes('受力') || allText.includes('速度') || allText.includes('加速度') || allText.includes('摩擦力')) {
-          mainSubject = '物理';
-        } else if (allText.includes('元素') || allText.includes('反应') || allText.includes('溶液') || allText.includes('化学键')) {
-          mainSubject = '化学';
-        } else {
-          mainSubject = '综合';
-        }
-      }
       const newRecord: SubmitRecord = {
         id: '',
         studentName: safeName,
-        科目:mainSubject,
         submitTime: new Date().toLocaleString('zh-CN'),
         imgList: [...images],
         questionList: allParsedData,
@@ -619,6 +599,30 @@ export default function Home() {
   };
 
   // ==========================================
+  // 教师端：删除记录
+  // ==========================================
+  const handleDeleteRecord = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (!confirm('确定要删除这条测试记录吗？')) return;
+
+    try {
+      const res = await fetch('/api/submitRecord', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+      });
+      if (!res.ok) throw new Error('删除失败');
+
+      setRecordList(prev => prev.filter(r => r.id !== id));
+      if (activeRecord?.id === id) {
+        setActiveRecord(null);
+      }
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  // ==========================================
   // 教师端：保存小问复核 (含强校验)
   // ==========================================
   const saveEdit = async () => {
@@ -644,7 +648,7 @@ export default function Home() {
         target.讲评建议 = sub.讲评建议;
         if (sub.步骤明细) target.步骤明细 = JSON.parse(JSON.stringify(sub.步骤明细));
 
-        (target as any).hasManualEdit = true; // 精准标记该小问被老师改过
+        (target as any).hasManualEdit = true;
         big.hasManualEdit = true;
         recomputeBigScore(big);
       },
@@ -665,7 +669,7 @@ export default function Home() {
     const newStep = { ...step, 该步骤满分: sMax.toString(), 实际得分: sScore.toString() };
 
     const subObj = activeRecord.questionList[bigIndex].小问列表[subIndex];
-    const tempSteps = [...subObj.步骤明细];
+    const tempSteps = [...(subObj.步骤明细 || [])];
     tempSteps[stepIndex] = newStep;
 
     const totalStepMax = tempSteps.reduce((acc, curr) => acc + toNumber(curr.该步骤满分), 0);
@@ -679,12 +683,13 @@ export default function Home() {
         const big = record.questionList[bigIndex];
         const sub = big.小问列表[subIndex];
 
+        if (!sub.步骤明细) sub.步骤明细 = [];
         sub.步骤明细[stepIndex] = newStep;
 
         const newSubScore = sub.步骤明细.reduce((acc, curr) => acc + toNumber(curr.实际得分), 0);
         sub.本小问学生得分 = normalizeScore(newSubScore);
 
-        (sub as any).hasManualEdit = true; // 精准标记该小问被老师改过
+        (sub as any).hasManualEdit = true;
         refreshSubAndBigScore(big, sub);
         big.hasManualEdit = true;
       },
@@ -707,40 +712,56 @@ export default function Home() {
     );
   };
 
-  // ==========================================
-  // 渲染：身份选择页
+    // ==========================================
+  // 渲染：登录页
   // ==========================================
   if (!role) {
     return (
       <main className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex flex-col items-center justify-center p-4">
-        <div className="mb-12 text-center">
-          <h1 className="text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600 mb-4">
-            AI 多模态批改 Agent
-          </h1>
-          <p className="text-gray-500 text-lg">拍照交作业，秒出步骤级批改</p>
-        </div>
-        <div className="flex flex-col md:flex-row gap-8">
-          <button
-            onClick={() => setRole('student')}
-            className="group bg-white p-8 rounded-3xl shadow-xl hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-2 border border-transparent hover:border-blue-200 w-64 flex flex-col items-center"
-          >
-            <div className="bg-blue-100 p-4 rounded-full mb-4 group-hover:scale-110 transition-transform">
-              <GraduationCap className="w-12 h-12 text-blue-600" />
-            </div>
-            <div className="text-2xl font-bold text-gray-800 mb-2">我是学生</div>
-            <div className="text-gray-500 text-sm">上传作业，获取即时反馈</div>
-          </button>
+        <div className="bg-white p-8 rounded-3xl shadow-xl w-full max-w-md">
+          <div className="text-center mb-8">
+            <h1 className="text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600 mb-2">
+              AI 多模态批改系统
+            </h1>
+            <p className="text-gray-500 text-sm">请登录以继续</p>
+          </div>
 
-          <button
-            onClick={() => setRole('teacher')}
-            className="group bg-white p-8 rounded-3xl shadow-xl hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-2 border border-transparent hover:border-emerald-200 w-64 flex flex-col items-center"
-          >
-            <div className="bg-emerald-100 p-4 rounded-full mb-4 group-hover:scale-110 transition-transform">
-              <Users className="w-12 h-12 text-emerald-600" />
+          <div className="space-y-5">
+            <div>
+              <label className="text-sm font-medium text-gray-700">账号（学号/工号）</label>
+              <input id="login-username" type="text" className="w-full border rounded-lg p-3 mt-1 bg-gray-50 focus:bg-white transition-colors" placeholder="请输入账号" />
             </div>
-            <div className="text-2xl font-bold text-gray-800 mb-2">我是老师</div>
-            <div className="text-gray-500 text-sm">查看看板，掌握班级学情</div>
-          </button>
+            <div>
+              <label className="text-sm font-medium text-gray-700">密码</label>
+              <input id="login-password" type="password" className="w-full border rounded-lg p-3 mt-1 bg-gray-50 focus:bg-white transition-colors" placeholder="请输入密码" />
+            </div>
+
+            <button
+              onClick={async () => {
+                const username = (document.getElementById('login-username') as HTMLInputElement).value;
+                const password = (document.getElementById('login-password') as HTMLInputElement).value;
+
+                if (!username || !password) return alert('请填写完整信息');
+
+                const res = await fetch('/api/auth/login', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ username, password })
+                });
+                const data = await res.json();
+
+                if (res.ok) {
+                  setRole(data.role);
+                  if (data.role === 'student') setStudentName(data.name);
+                } else {
+                  alert(data.error);
+                }
+              }}
+              className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 transition-all shadow-md mt-4"
+            >
+              登 录
+            </button>
+          </div>
         </div>
       </main>
     );
@@ -805,30 +826,12 @@ export default function Home() {
           <div className="grid grid-cols-12 gap-6">
             <div className="col-span-4 bg-white rounded-xl shadow p-4">
               <h2 className="font-bold text-lg mb-4">📋 学生提交列表</h2>
-              {/* 👇 新增：科目筛选按钮组 */}
-              <div className="flex gap-2 mb-4 overflow-x-auto">
-                {['全部', '数学', '物理', '化学', '综合'].map((sub) => (
-                  <button
-                    key={sub}
-                    onClick={() => setSelectedSubject(sub)}
-                    className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
-                      selectedSubject === sub 
-                        ? 'bg-blue-600 text-white shadow-sm' 
-                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                    }`}
-                  >
-                    {sub}
-                  </button>
-                ))}
-              </div>
-              {/* 👆 按钮组结束 */}
+
               {recordList.length === 0 ? (
                 <p className="text-gray-400 text-sm">暂无学生提交作业</p>
               ) : (
                 <div className="space-y-3">
-                  {recordList
-                    .filter(rec => selectedSubject === '全部' || rec.科目 === selectedSubject) // 👈 新增过滤
-                    .map(rec => (
+                  {recordList.map(rec => (
                     <div
                       key={rec.id}
                       onClick={() => handleSelectRecord(rec)}
@@ -838,18 +841,22 @@ export default function Home() {
                           : 'border-gray-200 hover:bg-gray-50'
                       }`}
                     >
-                      <div className="flex justify-between">
-                        <span className="font-medium flex items-center gap-2">
-                          {rec.studentName}
-                          <span className="text-[10px] bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded border border-indigo-100">
-                            {rec.科目 || '综合'}
-                          </span>
-                        </span>
-                        {rec.isReviewed ? (
-                          <CheckCircle className="text-green-500 w-4 h-4" />
-                        ) : (
-                          <FileText className="text-orange-400 w-4 h-4" />
-                        )}
+                      <div className="flex justify-between items-center">
+                        <span className="font-medium">{rec.studentName}</span>
+                        <div className="flex items-center gap-2">
+                          {rec.isReviewed ? (
+                            <CheckCircle className="text-green-500 w-4 h-4" />
+                          ) : (
+                            <FileText className="text-orange-400 w-4 h-4" />
+                          )}
+                          <button
+                            onClick={(e) => handleDeleteRecord(e, rec.id)}
+                            className="text-gray-400 hover:text-red-500 transition-colors p-1"
+                            title="删除记录"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
                       <div className="text-xs text-gray-500">{rec.submitTime}</div>
                       <div className="text-xs mt-1">
@@ -861,80 +868,71 @@ export default function Home() {
               )}
             </div>
 
-              {/* 宏观学情饼图 */}
-              <div className="col-span-12 mb-2 bg-white p-6 rounded-xl shadow border border-gray-100">
-                  <h2 className="font-bold text-lg mb-4 text-gray-800">📊 班级高频错因分析</h2>
-                  <div className="h-64 w-full">
+            {/* 👇 宏观学情饼图 */}
+            <div className="col-span-12 mb-2 bg-white p-6 rounded-xl shadow border border-gray-100">
+              <h2 className="font-bold text-lg mb-4 text-gray-800">📊 班级高频错因分析（全班汇总）</h2>
+              <div className="h-64 w-full">
+                {(() => {
+                  let concept = 0, calc = 0, logic = 0, other = 0;
+
+                  recordList.forEach(rec => {
+                    rec.questionList?.forEach(q => {
+                      q.小问列表?.forEach(sub => {
+                        const r = sub.错因归因 || '';
+                        const score = Number(sub.本小问学生得分 || 0);
+                        const max = Number(sub.本小问满分 || 0);
+
+                        if (score >= max || r.includes('作答正确') || r.includes('无错误') || r.includes('全对')) {
+                          return;
+                        }
+
+                        if (r.includes('概念') || r.includes('定理') || r.includes('公式') || r.includes('性质')) concept++;
+                        else if (r.includes('计算') || r.includes('符号') || r.includes('算错') || r.includes('粗心')) calc++;
+                        else if (r.includes('逻辑') || r.includes('步骤') || r.includes('思路') || r.includes('推导') || r.includes('严谨') || r.includes('证明')) logic++;
+                        else other++;
+                      });
+                    });
+                  });
+
+                  let chartData = [];
+                  const totalErrors = concept + calc + logic + other;
+
+                  if (totalErrors === 0) {
+                    chartData = [{ name: '全对 / 无错题', value: 1, color: '#10b981' }];
+                  } else {
+                    chartData = [
+                      { name: '概念模糊', value: concept, color: '#ef4444' },
+                      { name: '计算失误', value: calc, color: '#f59e0b' },
+                      { name: '逻辑断层', value: logic, color: '#3b82f6' },
+                      { name: '其他错误', value: other, color: '#8b5cf6' },
+                    ].filter(item => item.value > 0);
+                  }
+
+                  return (
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
                         <Pie
-                          data={(() => {
-                            let concept = 0, calc = 0, logic = 0, other = 0;
-                            if (activeRecord?.questionList) {
-                              activeRecord.questionList.forEach(q => {
-                                q.小问列表?.forEach(sub => {
-                                  const r = sub.错因归因 || '';
-                                  // 🚨 核心判断：如果分数等于满分，或者明确写了正确，就跳过
-                                  if (Number(sub.本小问学生得分) >= Number(sub.本小问满分) || r.includes('作答正确') || r.includes('无错误')) return;
-
-                                  // 分类统计
-                                  if (r.includes('概念') || r.includes('定理') || r.includes('公式')) concept++;
-                                  else if (r.includes('计算') || r.includes('符号') || r.includes('算错')) calc++;
-                                  else if (r.includes('逻辑') || r.includes('步骤') || r.includes('思路') || r.includes('推导') || r.includes('严谨')) logic++;
-                                  else other++; // 没匹配上的，统统算作其他错误
-                                });
-                              });
-                            }
-
-                            const totalErr = concept + calc + logic + other;
-                            if (totalErr === 0) return [{ name: '全对', value: 1, color: '#10b981' }];
-
-                            return [
-                              { name: '概念模糊', value: concept, color: '#ef4444' },
-                              { name: '计算失误', value: calc, color: '#f59e0b' },
-                              { name: '逻辑断层', value: logic, color: '#3b82f6' },
-                              { name: '其他错误', value: other, color: '#8b5cf6' }, // 紫色
-                            ].filter(item => item.value > 0); // 过滤掉 0 的项
-                          })()}
+                          data={chartData}
                           cx="50%"
                           cy="50%"
                           innerRadius={60}
                           outerRadius={80}
                           paddingAngle={5}
                           dataKey="value"
-                          label={({ name, percent }: any): string => `${name} ${((percent || 0) * 100).toFixed(0)}%`}
+                          label={({ name, percent }: any) => `${name} ${((percent || 0) * 100).toFixed(0)}%`}
                         >
-                          {/* 动态渲染颜色 */}
-                          {(() => {
-                            let concept = 0, calc = 0, logic = 0, other = 0;
-                            if (activeRecord?.questionList) {
-                              activeRecord.questionList.forEach(q => {
-                                q.小问列表?.forEach(sub => {
-                                  const r = sub.错因归因 || '';
-                                  if (Number(sub.本小问学生得分) >= Number(sub.本小问满分) || r.includes('作答正确') || r.includes('无错误')) return;
-                                  if (r.includes('概念') || r.includes('定理') || r.includes('公式')) concept++;
-                                  else if (r.includes('计算') || r.includes('符号') || r.includes('算错')) calc++;
-                                  else if (r.includes('逻辑') || r.includes('步骤') || r.includes('思路') || r.includes('推导') || r.includes('严谨')) logic++;
-                                  else other++;
-                                });
-                              });
-                            }
-                            const totalErr = concept + calc + logic + other;
-                            if (totalErr === 0) return <Cell fill="#10b981" />;
-                            return [
-                              concept > 0 && <Cell key="1" fill="#ef4444" />,
-                              calc > 0 && <Cell key="2" fill="#f59e0b" />,
-                              logic > 0 && <Cell key="3" fill="#3b82f6" />,
-                              other > 0 && <Cell key="4" fill="#8b5cf6" />,
-                            ];
-                          })()}
+                          {chartData.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={entry.color} />
+                          ))}
                         </Pie>
-                        <Tooltip />
+                        <Tooltip formatter={(value: any) => [`${value} 个小问`, '错误数量']} />
                         <Legend verticalAlign="bottom" height={36}/>
                       </PieChart>
                     </ResponsiveContainer>
-                  </div>
-                </div>
+                  );
+                })()}
+              </div>
+            </div>
 
             <div className="col-span-8 bg-white rounded-xl shadow p-6">
               {activeRecord ? (
@@ -954,7 +952,7 @@ export default function Home() {
                     </span>
                   </div>
 
-                  {activeRecord.imgList.length > 0 && (
+                  {activeRecord.imgList?.length > 0 && (
                     <div className="mb-4 flex flex-wrap gap-2">
                       {activeRecord.imgList.map((img, idx) => (
                         <img
@@ -962,7 +960,7 @@ export default function Home() {
                           src={img}
                           alt={`作业图 ${idx + 1}`}
                           onClick={() => setPreviewImage(img)}
-                          className="max-h-40 border rounded cursor-pointer" // 虽然加了 cursor-pointer 但没有点击事件
+                          className="max-h-40 border rounded cursor-pointer"
                         />
                       ))}
                     </div>
@@ -979,7 +977,7 @@ export default function Home() {
                       </button>
                     </div>
                     <textarea
-                      value={activeRecord.teacherComment}
+                      value={activeRecord.teacherComment || ''}
                       onChange={e =>
                         setActiveRecord({
                           ...activeRecord,
@@ -995,14 +993,14 @@ export default function Home() {
                     <div className="text-sm text-gray-600">
                       总得分：
                       <span className="font-bold text-blue-700 text-base">
-                        {activeRecord.questionList.reduce(
+                        {(activeRecord.questionList || []).reduce(
                           (s, bq) => s + toNumber(bq.大题实得分),
                           0
                         )}
                       </span>
                       <span className="text-gray-400">
                         /{' '}
-                        {activeRecord.questionList.reduce(
+                        {(activeRecord.questionList || []).reduce(
                           (s, bq) => s + toNumber(bq.大题总分),
                           0
                         )}
@@ -1011,7 +1009,7 @@ export default function Home() {
                     <div className="flex gap-2">
                       <button
                         onClick={() => {
-                          const keys = buildExpandKeys(activeRecord.questionList);
+                          const keys = buildExpandKeys(activeRecord.questionList || []);
                           setExpandedBigQuestions(keys.big);
                           setExpandedSubQuestions(keys.sub);
                         }}
@@ -1032,7 +1030,7 @@ export default function Home() {
                   </div>
 
                   <div className="space-y-4">
-                    {activeRecord.questionList.map((bigQ, bigIdx) => {
+                    {(activeRecord.questionList || []).map((bigQ, bigIdx) => {
                       const bigKey = `big-${bigIdx}`;
                       const bigOpen = expandedBigQuestions.has(bigKey);
 
@@ -1043,8 +1041,8 @@ export default function Home() {
                             className="w-full flex justify-between items-center p-4 bg-gray-50 hover:bg-gray-100"
                           >
                             <span className="font-semibold">
-                              大题 {bigQ.大题题号}｜总分：{bigQ.大题总分}｜得分：
-                              {bigQ.大题实得分}
+                              大题 {bigQ.大题题号}｜总分：{bigQ.大题总分 || 0}｜得分：
+                              {bigQ.大题实得分 || 0}
                               {bigQ.hasManualEdit ? (
                                 <span className="ml-2 text-orange-500 text-xs">（已人工调整）</span>
                               ) : null}
@@ -1057,7 +1055,7 @@ export default function Home() {
                               <div className="text-sm text-gray-600 bg-gray-50 p-2 rounded">
                                 题干：
                                 <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
-                                  {bigQ.大题题干}
+                                  {bigQ.大题题干 || ''}
                                 </ReactMarkdown>
                               </div>
 
@@ -1067,7 +1065,7 @@ export default function Home() {
                                   type="number"
                                   min={0}
                                   step="0.5"
-                                  value={bigQ.大题总分}
+                                  value={bigQ.大题总分 || ''}
                                   onChange={e =>
                                     handleChangeBigStandardScore(bigIdx, e.target.value)
                                   }
@@ -1075,15 +1073,15 @@ export default function Home() {
                                 />
                               </div>
 
-                              {bigQ.小问列表.map((subQ, subIdx) => {
+                              {(bigQ.小问列表 || []).map((subQ, subIdx) => {
                                 const subKey = `sub-${bigIdx}-${subIdx}`;
                                 const subOpen = expandedSubQuestions.has(subKey);
                                 const stepTotal = sumStepMax(subQ);
                                 const subMaxNum = toNumber(subQ.本小问满分);
                                 const stepWarn =
-                                  subQ.步骤明细.length > 0 &&
+                                  subQ.步骤明细 && subQ.步骤明细.length > 0 &&
                                   Math.abs(stepTotal - subMaxNum) > 0.001;
-                                const stepScoreSummary = subQ.步骤明细
+                                const stepScoreSummary = (subQ.步骤明细 || [])
                                   .map(
                                     (st) =>
                                       `${st.该步骤满分}→${st.实际得分}${
@@ -1103,9 +1101,9 @@ export default function Home() {
                                       className="w-full flex justify-between items-center p-3 bg-blue-50 hover:bg-blue-100"
                                     >
                                       <span className="font-medium text-blue-900">
-                                        小问 {subQ.小问编号}｜满分：{subQ.本小问满分}｜学生得分：
-                                        {subQ.本小问学生得分}
-                                        {subQ.步骤明细.length > 0 && (
+                                        小问 {subQ.小问编号}｜满分：{subQ.本小问满分 || 0}｜学生得分：
+                                        {subQ.本小问学生得分 || 0}
+                                        {subQ.步骤明细 && subQ.步骤明细.length > 0 && (
                                           <span className="ml-2 text-xs font-normal text-blue-600">
                                             步骤得分：{stepScoreSummary}
                                           </span>
@@ -1120,13 +1118,13 @@ export default function Home() {
                                           <div>
                                             <div className="text-xs text-gray-500">题干</div>
                                             <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
-                                              {subQ.小问题干}
+                                              {subQ.小问题干 || ''}
                                             </ReactMarkdown>
                                           </div>
                                           <div>
                                             <div className="text-xs text-gray-500">学生作答</div>
                                             <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
-                                              {subQ.学生作答}
+                                              {subQ.学生作答 || ''}
                                             </ReactMarkdown>
                                           </div>
                                         </div>
@@ -1142,17 +1140,17 @@ export default function Home() {
 
                                         <div className="text-sm bg-amber-50 p-2 rounded">
                                           <div className="text-xs text-gray-500">评分细则</div>
-                                          {subQ.评分细则}
+                                          {subQ.评分细则 || ''}
                                         </div>
 
                                         <div className="text-sm">
                                           <div className="text-xs text-gray-500">错因归因</div>
-                                          {subQ.错因归因}
+                                          {subQ.错因归因 || ''}
                                         </div>
 
                                         <div className="text-sm">
                                           <div className="text-xs text-gray-500">讲评建议</div>
-                                          {subQ.讲评建议}
+                                          {subQ.讲评建议 || ''}
                                         </div>
 
                                         <div className="flex gap-3 items-center">
@@ -1162,7 +1160,7 @@ export default function Home() {
                                               type="number"
                                               min={0}
                                               step="0.5"
-                                              value={subQ.本小问满分}
+                                              value={subQ.本小问满分 || ''}
                                               onChange={e =>
                                                 handleChangeSubStandardScore(
                                                   bigIdx,
@@ -1179,7 +1177,7 @@ export default function Home() {
                                               type="number"
                                               min={0}
                                               step="0.5"
-                                              value={subQ.本小问学生得分}
+                                              value={subQ.本小问学生得分 || ''}
                                               onChange={e =>
                                                 handleChangeSubStudentScore(
                                                   bigIdx,
@@ -1217,7 +1215,7 @@ export default function Home() {
                                                   </tr>
                                                 </thead>
                                                 <tbody>
-                                                  {subQ.步骤明细.map((step, sIdx) => (
+                                                  {(subQ.步骤明细 || []).map((step, sIdx) => (
                                                     <tr key={sIdx} className="border-t border-gray-100 hover:bg-gray-50">
                                                       <td className="py-3 px-3 text-center text-gray-500">{step.步骤序号}</td>
                                                       <td className="py-3 px-3 text-center">{step.该步骤满分}</td>
@@ -1225,7 +1223,7 @@ export default function Home() {
                                                       <td className={`py-3 px-3 text-center font-bold ${step.判定 === '正确' ? 'text-green-600' : step.判定 === '部分正确' ? 'text-amber-600' : 'text-red-600'}`}>
                                                         {step.判定}
                                                       </td>
-                                                      <td className="py-3 px-3 text-gray-600">{step.说明}</td>
+                                                      <td className="py-3 px-3 text-gray-600">{step.说明 || ''}</td>
                                                       <td className="py-3 px-3 text-center">
                                                         <button
                                                           onClick={() =>
@@ -1299,7 +1297,7 @@ export default function Home() {
                     type="number"
                     min={0}
                     step="0.5"
-                    value={editTarget.sub.本小问满分}
+                    value={editTarget.sub.本小问满分 || ''}
                     onChange={e =>
                       setEditTarget({
                         ...editTarget,
@@ -1315,7 +1313,7 @@ export default function Home() {
                     type="number"
                     min={0}
                     step="0.5"
-                    value={editTarget.sub.本小问学生得分}
+                    value={editTarget.sub.本小问学生得分 || ''}
                     onChange={e =>
                       setEditTarget({
                         ...editTarget,
@@ -1328,7 +1326,7 @@ export default function Home() {
                 <div>
                   <label className="text-sm text-gray-600">错因归因</label>
                   <textarea
-                    value={editTarget.sub.错因归因}
+                    value={editTarget.sub.错因归因 || ''}
                     onChange={e =>
                       setEditTarget({
                         ...editTarget,
@@ -1341,7 +1339,7 @@ export default function Home() {
                 <div>
                   <label className="text-sm text-gray-600">讲评建议</label>
                   <textarea
-                    value={editTarget.sub.讲评建议}
+                    value={editTarget.sub.讲评建议 || ''}
                     onChange={e =>
                       setEditTarget({
                         ...editTarget,
@@ -1381,7 +1379,7 @@ export default function Home() {
                     type="number"
                     min={0}
                     step="0.5"
-                    value={editStepTarget.step.该步骤满分}
+                    value={editStepTarget.step.该步骤满分 || ''}
                     onChange={e =>
                       setEditStepTarget({
                         ...editStepTarget,
@@ -1397,7 +1395,7 @@ export default function Home() {
                     type="number"
                     min={0}
                     step="0.5"
-                    value={editStepTarget.step.实际得分}
+                    value={editStepTarget.step.实际得分 || ''}
                     onChange={e =>
                       setEditStepTarget({
                         ...editStepTarget,
@@ -1413,7 +1411,7 @@ export default function Home() {
                 <div>
                   <label className="text-sm text-gray-600">判定</label>
                   <select
-                    value={editStepTarget.step.判定}
+                    value={editStepTarget.step.判定 || '正确'}
                     onChange={e =>
                       setEditStepTarget({
                         ...editStepTarget,
@@ -1430,7 +1428,7 @@ export default function Home() {
                 <div>
                   <label className="text-sm text-gray-600">说明</label>
                   <textarea
-                    value={editStepTarget.step.说明}
+                    value={editStepTarget.step.说明 || ''}
                     onChange={e =>
                       setEditStepTarget({
                         ...editStepTarget,
@@ -1619,7 +1617,7 @@ export default function Home() {
       )}
 
       <div className="w-full max-w-4xl space-y-8">
-        {results.map((bigItem, bigIdx) => (
+        {(results || []).map((bigItem, bigIdx) => (
           <div
             key={bigIdx}
             className="bg-white rounded-2xl shadow-md border border-gray-100 overflow-hidden transition-all hover:shadow-lg"
@@ -1644,10 +1642,10 @@ export default function Home() {
                   ) : (
                     <AlertCircle className="w-3 h-3" />
                   )}
-                  置信度: {bigItem.识别置信度}
+                  置信度: {bigItem.识别置信度 || '未知'}
                 </span>
                 <span className="px-3 py-1 rounded-full text-xs font-bold bg-blue-600 text-white shadow-sm">
-                  得分：{bigItem.大题实得分}/{bigItem.大题总分}
+                  得分：{bigItem.大题实得分 || 0}/{bigItem.大题总分 || 0}
                 </span>
               </div>
             </div>
@@ -1659,14 +1657,13 @@ export default function Home() {
                 </span>
                 <div className="bg-gray-50 p-4 rounded-xl text-gray-800 text-base leading-relaxed border border-gray-100">
                   <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
-                    {bigItem.大题题干}
+                    {bigItem.大题题干 || ''}
                   </ReactMarkdown>
                 </div>
               </div>
 
               <div className="space-y-6">
-                {bigItem.小问列表?.map((subItem, subIdx) => {
-                  // 精准判断当前小问是否被修改
+                {(bigItem.小问列表 || []).map((subItem, subIdx) => {
                   const isTeacherEdited = (subItem as any).hasManualEdit || bigItem.hasManualEdit;
 
                   return (
@@ -1677,7 +1674,6 @@ export default function Home() {
                       <h3 className="font-bold text-blue-900 text-lg mb-4 flex justify-between items-start gap-3">
                         <span className="flex items-center gap-2">
                           小问 {subItem.小问编号}
-                          {/* 教师修正提示标签 */}
                           {isTeacherEdited && (
                             <span className="text-xs bg-orange-100 text-orange-600 border border-orange-200 px-2 py-0.5 rounded-full flex items-center gap-1">
                               <AlertTriangle className="w-3 h-3" /> 教师修正分数
@@ -1686,14 +1682,13 @@ export default function Home() {
                         </span>
                         <span className="flex flex-col items-end gap-1">
                           <span className={`text-sm px-2 py-1 rounded ${isTeacherEdited ? 'bg-orange-50 text-orange-700 font-bold' : 'bg-blue-100 text-blue-700'}`}>
-                            满分：{subItem.本小问满分}分｜得分：{subItem.本小问学生得分}分
+                            满分：{subItem.本小问满分 || 0}分｜得分：{subItem.本小问学生得分 || 0}分
                           </span>
 
-                          {/* 如果教师没修改过，正常显示 AI 的步骤得分摘要 */}
                           {!isTeacherEdited && subItem.步骤明细 && subItem.步骤明细.length > 0 && (
                             <span className="text-xs text-blue-600">
                               步骤得分：
-                              {subItem.步骤明细
+                              {(subItem.步骤明细 || [])
                                 .map(
                                   (st) =>
                                     `${st.该步骤满分}→${st.实际得分}${
@@ -1717,10 +1712,9 @@ export default function Home() {
                           </span>
                           <div className="bg-white p-3 rounded-lg text-gray-800 text-sm border border-gray-100 min-h-[60px]">
                             <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
-                              {subItem.小问题干}
+                              {subItem.小问题干 || ''}
                             </ReactMarkdown>
 
-                            {/* 选项直接合并到题干下方 */}
                             {subItem.选项内容 && subItem.选项内容.trim() && (
                               <div className="mt-3 pt-3 border-t border-gray-100 text-gray-700">
                                 <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
@@ -1736,7 +1730,7 @@ export default function Home() {
                           </span>
                           <div className="bg-white p-3 rounded-lg text-gray-800 text-sm border border-gray-100 min-h-[60px]">
                             <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
-                              {subItem.学生作答}
+                              {subItem.学生作答 || ''}
                             </ReactMarkdown>
                           </div>
                         </div>
@@ -1755,14 +1749,12 @@ export default function Home() {
                         </div>
                       )}
 
-                      {/* ✅ 修改：去掉了隐藏限制，表格永远展示最新数据 */}
                       {subItem.步骤明细 && subItem.步骤明细.length > 0 && (
                         <div className="my-4">
                           <div className="flex items-center gap-2 mb-2">
                             <span className="text-xs font-bold text-gray-500 block">
                               📋 分步阅卷明细
                             </span>
-                            {/* ✅ 如果被修改过，加个小标签提示 */}
                             {isTeacherEdited && (
                               <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-bold">
                                 含教师复核
@@ -1801,7 +1793,7 @@ export default function Home() {
                                     >
                                       {step.判定}
                                     </td>
-                                    <td className="py-3 px-3 text-gray-600">{step.说明}</td>
+                                    <td className="py-3 px-3 text-gray-600">{step.说明 || ''}</td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -1815,13 +1807,13 @@ export default function Home() {
                           <span className="font-bold text-gray-700 text-sm">🔍 错因归因：</span>
                           {isTeacherEdited && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-bold">已复核</span>}
                         </div>
-                        <div className="mb-2 text-gray-600 text-sm ml-1">{subItem.错因归因}</div>
+                        <div className="mb-2 text-gray-600 text-sm ml-1">{subItem.错因归因 || ''}</div>
 
                         <div className="flex items-center gap-2 mb-2 mt-4">
                           <span className="font-bold text-gray-700 text-sm">💡 讲评建议：</span>
                           {isTeacherEdited && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-bold">已复核</span>}
                         </div>
-                        <div className="text-gray-600 text-sm ml-1">{subItem.讲评建议}</div>
+                        <div className="text-gray-600 text-sm ml-1">{subItem.讲评建议 || ''}</div>
                       </div>
                     </div>
                   );

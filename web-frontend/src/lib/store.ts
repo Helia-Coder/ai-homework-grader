@@ -1,124 +1,195 @@
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
-import type { SubmitRecord, SubmitRecordSummary } from './types';
+import { PrismaClient } from '@prisma/client';
 
-/**
- * 提交记录存储层。
- *
- * 设计要点：
- * 1. **文件持久化**：数据落在 `.data/submit-records.json`，重启服务不丢。
- *    课程演示场景下够用，且不引入数据库依赖。
- * 2. **写操作串行化**：多个请求同时写同一个文件会互相覆盖，
- *    这里用一条 Promise 链把所有写操作排队，保证最终一致。
- * 3. **列表不含原图**：原图 base64 占单条记录的 99%，
- *    列表接口剥离后只返回 imgCount，详情按需单独取。
- */
+const prisma = new PrismaClient();
 
-const DATA_DIR = path.join(process.cwd(), '.data');
-const DATA_FILE = path.join(DATA_DIR, 'submit-records.json');
-
-/** 内存缓存，避免每次请求都读盘 */
-let cache: SubmitRecord[] | null = null;
-/** 写队列，保证写操作串行执行 */
-let writeChain: Promise<unknown> = Promise.resolve();
-
-/** 读取全部记录（带内存缓存） */
-async function readAll(): Promise<SubmitRecord[]> {
-  if (cache) return cache;
-  try {
-    const raw = await fs.readFile(DATA_FILE, 'utf-8');
-    const parsed = JSON.parse(raw);
-    cache = Array.isArray(parsed) ? (parsed as SubmitRecord[]) : [];
-  } catch {
-    // 文件不存在或内容损坏时，从空列表开始，不影响服务可用性
-    cache = [];
-  }
-  return cache;
-}
-
-/** 写回磁盘。使用临时文件 + rename，保证不会写出半截文件 */
-async function writeAll(records: SubmitRecord[]): Promise<void> {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  const tmpFile = `${DATA_FILE}.${process.pid}.tmp`;
-  await fs.writeFile(tmpFile, JSON.stringify(records, null, 2), 'utf-8');
-  await fs.rename(tmpFile, DATA_FILE);
-}
-
-/**
- * 把写操作排进串行队列。
- *
- * 直接并发写同一个文件会导致后写覆盖先写，
- * 这里保证任意时刻只有一个写操作在进行。
- */
-function enqueueWrite(mutator: (records: SubmitRecord[]) => SubmitRecord[]): Promise<void> {
-  const task = writeChain.then(async () => {
-    const records = await readAll();
-    const next = mutator(records);
-    await writeAll(next);
-    cache = next;
+// 保存新记录
+export async function addRecord(data: any) {
+  return await prisma.record.create({
+    data: {
+      studentName: data.studentName,
+      submitTime: data.submitTime,
+      isReviewed: data.isReviewed || false,
+      teacherComment: data.teacherComment || '',
+      imgList: data.imgList,
+      questionList: {
+        create: data.questionList.map((big: any) => ({
+          questionNumber: big.大题题号,
+          stem: big.大题题干,
+          totalScore: big.大题总分,
+          actualScore: big.大题实得分,
+          confidence: big.识别置信度 || '高',
+          hasManualEdit: big.hasManualEdit || false,
+          subQuestions: {
+            create: (big.小问列表 || []).map((sub: any) => ({
+              subNumber: sub.小问编号,
+              stem: sub.小问题干,
+              studentAnswer: sub.学生作答,
+              optionContent: sub.选项内容 || '',
+              maxScore: sub.本小问满分,
+              studentScore: sub.本小问学生得分,
+              gradingRule: sub.评分细则 || '',
+              errorReason: sub.错因归因,
+              teachingAdvice: sub.讲评建议,
+              hasManualEdit: sub.hasManualEdit || false,
+              steps: {
+                create: (sub.步骤明细 || []).map((st: any) => ({
+                  stepNumber: st.步骤序号,
+                  maxScore: st.该步骤满分,
+                  actualScore: st.实际得分,
+                  judgment: st.判定,
+                  explanation: st.说明
+                }))
+              }
+            }))
+          }
+        }))
+      }
+    }
   });
-  // 单个写失败不能阻断后续写，用 catch 兜住
-  writeChain = task.catch(() => undefined);
-  return task;
 }
 
-/** 剥离原图，生成列表用的精简记录 */
-export function toSummary(record: SubmitRecord): SubmitRecordSummary {
-  const { imgList, ...rest } = record;
-  return { ...rest, imgCount: imgList?.length ?? 0 };
+// 获取列表
+export async function getRecordSummaries() {
+  const records = await prisma.record.findMany({
+    select: {
+      id: true,
+      studentName: true,
+      submitTime: true,
+      isReviewed: true,
+      teacherComment: true,
+      imgList: true,
+      questionList: { select: { id: true } },
+    },
+    orderBy: { createdAt: 'desc' }
+  });
+
+  return records.map(r => ({
+    id: r.id,
+    studentName: r.studentName,
+    submitTime: r.submitTime,
+    isReviewed: r.isReviewed,
+    teacherComment: r.teacherComment,
+    imgCount: Array.isArray(r.imgList) ? (r.imgList as any[]).length : 0,
+    questionList: r.questionList as any,
+  }));
 }
 
-/** 获取全部记录（含原图），供详情查询使用 */
-export async function getRecords(): Promise<SubmitRecord[]> {
-  return readAll();
-}
+// 获取单条详情
+export async function getRecordById(id: string) {
+  const record = await prisma.record.findUnique({
+    where: { id },
+    include: {
+      questionList: {
+        include: {
+          subQuestions: { include: { steps: true } }
+        }
+      }
+    }
+  });
 
-/** 获取列表用的精简记录 */
-export async function getRecordSummaries(): Promise<SubmitRecordSummary[]> {
-  const records = await readAll();
-  return records.map(toSummary);
-}
+  if (!record) return null;
 
-/** 按 id 获取单条记录 */
-export async function getRecordById(id: string): Promise<SubmitRecord | undefined> {
-  const records = await readAll();
-  return records.find((r) => r.id === id);
-}
-
-/** 新增一条记录，返回带 id 的完整记录 */
-export async function addRecord(
-  record: Omit<SubmitRecord, 'id'> & { id?: string }
-): Promise<SubmitRecord> {
-  const created: SubmitRecord = {
-    ...record,
-    id: record.id ?? `rec_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+  return {
+    id: record.id,
+    studentName: record.studentName,
+    submitTime: record.submitTime,
+    isReviewed: record.isReviewed,
+    teacherComment: record.teacherComment,
+    imgList: record.imgList as string[],
+    questionList: record.questionList.map((big: any) => ({
+      大题题号: big.questionNumber,
+      大题题干: big.stem,
+      大题总分: big.totalScore,
+      大题实得分: big.actualScore,
+      识别置信度: big.confidence,
+      hasManualEdit: big.hasManualEdit,
+      小问列表: big.subQuestions.map((sub: any) => ({
+        小问编号: sub.subNumber,
+        小问题干: sub.stem,
+        学生作答: sub.studentAnswer,
+        选项内容: sub.optionContent,
+        本小问满分: sub.maxScore,
+        本小问学生得分: sub.studentScore,
+        评分细则: sub.gradingRule,
+        错因归因: sub.errorReason,
+        讲评建议: sub.teachingAdvice,
+        hasManualEdit: sub.hasManualEdit,
+        步骤明细: sub.steps.map((st: any) => ({
+          步骤序号: st.stepNumber,
+          该步骤满分: st.maxScore,
+          实际得分: st.actualScore,
+          判定: st.judgment,
+          说明: st.explanation
+        }))
+      }))
+    }))
   };
-  await enqueueWrite((records) => [...records, created]);
-  return created;
 }
 
-/** 按 id 更新记录，返回更新后的记录；找不到返回 undefined */
-export async function updateRecord(
-  id: string,
-  patch: Partial<Pick<SubmitRecord, 'questionList' | 'teacherComment' | 'isReviewed'>>
-): Promise<SubmitRecord | undefined> {
-  let updated: SubmitRecord | undefined;
-  await enqueueWrite((records) => {
-    updated = records.find((r) => r.id === id);
-    if (!updated) return records;
-    updated = { ...updated, ...patch };
-    return records.map((r) => (r.id === id ? updated! : r));
-  });
-  return updated;
+// 更新记录
+export async function updateRecord(id: string, data: any) {
+  try {
+    await prisma.record.update({
+      where: { id },
+      data: {
+        teacherComment: data.teacherComment,
+        isReviewed: data.isReviewed,
+      }
+    });
+
+    if (data.questionList) {
+      await prisma.bigQuestion.deleteMany({ where: { recordId: id } });
+
+      for (const big of data.questionList) {
+        await prisma.bigQuestion.create({
+          data: {
+            recordId: id,
+            questionNumber: big.大题题号,
+            stem: big.大题题干,
+            totalScore: big.大题总分,
+            actualScore: big.大题实得分,
+            confidence: big.识别置信度 || '高',
+            hasManualEdit: big.hasManualEdit || false,
+            subQuestions: {
+              create: (big.小问列表 || []).map((sub: any) => ({
+                subNumber: sub.小问编号,
+                stem: sub.小问题干,
+                studentAnswer: sub.学生作答,
+                optionContent: sub.选项内容 || '',
+                maxScore: sub.本小问满分,
+                studentScore: sub.本小问学生得分,
+                gradingRule: sub.评分细则 || '',
+                errorReason: sub.错因归因,
+                teachingAdvice: sub.讲评建议,
+                hasManualEdit: sub.hasManualEdit || false,
+                steps: {
+                  create: (sub.步骤明细 || []).map((st: any) => ({
+                    stepNumber: st.步骤序号,
+                    maxScore: st.该步骤满分,
+                    actualScore: st.实际得分,
+                    judgment: st.判定,
+                    explanation: st.说明
+                  }))
+                }
+              }))
+            }
+          }
+        });
+      }
+    }
+    return true;
+  } catch (error) {
+    console.error("更新失败:", error);
+    return false;
+  }
 }
 
-/** 按 id 删除记录 */
-export async function deleteRecord(id: string): Promise<boolean> {
-  let removed = false;
-  await enqueueWrite((records) => {
-    const next = records.filter((r) => r.id !== id);
-    removed = next.length !== records.length;
-    return next;
-  });
-  return removed;
+// 删除记录
+export async function deleteRecord(id: string) {
+  try {
+    await prisma.record.delete({ where: { id } });
+    return true;
+  } catch {
+    return false;
+  }
 }
