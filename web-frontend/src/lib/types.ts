@@ -47,6 +47,7 @@ export interface SubQuestion {
 export interface BigQuestionData {
   /** 大题题号 */
   大题题号: string;
+  科目?:string;
   /** 大题题干 */
   大题题干: string;
   /** 大题标准总分 */
@@ -69,6 +70,7 @@ export interface SubmitRecord {
   studentName: string;
   /** 提交时间 */
   submitTime: string;
+  科目?:string;
   /** 作业原图列表（data URL） */
   imgList: string[];
   /** 批改结果 */
@@ -90,6 +92,7 @@ export interface SubmitRecord {
 export interface SubmitRecordSummary {
   id: string;
   studentName: string;
+  科目?:string;
   submitTime: string;
   questionList: BigQuestionData[];
   isReviewed: boolean;

@@ -21,7 +21,7 @@ export const GRADE_MODEL = process.env.DASHSCOPE_GRADE_MODEL || 'qwen3.7-plus';
 export const EVALUATE_MODEL = process.env.DASHSCOPE_EVALUATE_MODEL || 'qwen3.7-plus';
 
 /** 多模态识别比较慢，给足时间；超过 120s 视为失败 */
-const DEFAULT_TIMEOUT_MS = Number(process.env.DASHSCOPE_TIMEOUT_MS || 120_000);
+const DEFAULT_TIMEOUT_MS = Number(process.env.DASHSCOPE_TIMEOUT_MS || 300_000);
 
 /** 可重试的状态码 */
 const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);

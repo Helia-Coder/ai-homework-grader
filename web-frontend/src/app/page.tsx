@@ -136,6 +136,7 @@ export default function Home() {
   const activeHistoryIdRef = useRef<string | null>(null);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autosavePendingRef = useRef<SubmitRecord | null>(null);
+  const [selectedSubject, setSelectedSubject] = useState<string>('全部');
 
   // ==========================================
   // 通用 UI 工具函数
@@ -441,9 +442,11 @@ export default function Home() {
 
       const safeName = (studentName || '').trim() || '测试学生';
 
+      const mainSubject = allParsedData.find(q => q.科目)?.科目 || '综合';
       const newRecord: SubmitRecord = {
         id: '',
         studentName: safeName,
+        科目:mainSubject,
         submitTime: new Date().toLocaleString('zh-CN'),
         imgList: [...images],
         questionList: allParsedData,
@@ -787,11 +790,30 @@ export default function Home() {
           <div className="grid grid-cols-12 gap-6">
             <div className="col-span-4 bg-white rounded-xl shadow p-4">
               <h2 className="font-bold text-lg mb-4">📋 学生提交列表</h2>
+              {/* 👇 新增：科目筛选按钮组 */}
+              <div className="flex gap-2 mb-4 overflow-x-auto">
+                {['全部', '数学', '物理', '化学', '综合'].map((sub) => (
+                  <button
+                    key={sub}
+                    onClick={() => setSelectedSubject(sub)}
+                    className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                      selectedSubject === sub 
+                        ? 'bg-blue-600 text-white shadow-sm' 
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    {sub}
+                  </button>
+                ))}
+              </div>
+              {/* 👆 按钮组结束 */}
               {recordList.length === 0 ? (
                 <p className="text-gray-400 text-sm">暂无学生提交作业</p>
               ) : (
                 <div className="space-y-3">
-                  {recordList.map(rec => (
+                  {recordList
+                    .filter(rec => selectedSubject === '全部' || rec.科目 === selectedSubject) // 👈 新增过滤
+                    .map(rec => (
                     <div
                       key={rec.id}
                       onClick={() => handleSelectRecord(rec)}
@@ -802,7 +824,12 @@ export default function Home() {
                       }`}
                     >
                       <div className="flex justify-between">
-                        <span className="font-medium">{rec.studentName}</span>
+                        <span className="font-medium flex items-center gap-2">
+                          {rec.studentName}
+                          <span className="text-[10px] bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded border border-indigo-100">
+                            {rec.科目 || '综合'}
+                          </span>
+                        </span>
                         {rec.isReviewed ? (
                           <CheckCircle className="text-green-500 w-4 h-4" />
                         ) : (
@@ -826,22 +853,66 @@ export default function Home() {
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
                         <Pie
-                          data={[
-                            { name: '概念模糊', value: 45 },
-                            { name: '计算失误', value: 35 },
-                            { name: '逻辑断层', value: 20 },
-                          ]}
+                          data={(() => {
+                            let concept = 0, calc = 0, logic = 0, other = 0;
+                            if (activeRecord?.questionList) {
+                              activeRecord.questionList.forEach(q => {
+                                q.小问列表?.forEach(sub => {
+                                  const r = sub.错因归因 || '';
+                                  // 🚨 核心判断：如果分数等于满分，或者明确写了正确，就跳过
+                                  if (Number(sub.本小问学生得分) >= Number(sub.本小问满分) || r.includes('作答正确') || r.includes('无错误')) return;
+
+                                  // 分类统计
+                                  if (r.includes('概念') || r.includes('定理') || r.includes('公式')) concept++;
+                                  else if (r.includes('计算') || r.includes('符号') || r.includes('算错')) calc++;
+                                  else if (r.includes('逻辑') || r.includes('步骤') || r.includes('思路') || r.includes('推导') || r.includes('严谨')) logic++;
+                                  else other++; // 没匹配上的，统统算作其他错误
+                                });
+                              });
+                            }
+
+                            const totalErr = concept + calc + logic + other;
+                            if (totalErr === 0) return [{ name: '全对', value: 1, color: '#10b981' }];
+
+                            return [
+                              { name: '概念模糊', value: concept, color: '#ef4444' },
+                              { name: '计算失误', value: calc, color: '#f59e0b' },
+                              { name: '逻辑断层', value: logic, color: '#3b82f6' },
+                              { name: '其他错误', value: other, color: '#8b5cf6' }, // 紫色
+                            ].filter(item => item.value > 0); // 过滤掉 0 的项
+                          })()}
                           cx="50%"
                           cy="50%"
                           innerRadius={60}
                           outerRadius={80}
                           paddingAngle={5}
                           dataKey="value"
-                          label={({ name, percent }) => `${name} ${((percent || 0) * 100).toFixed(0)}%`}
+                          label={({ name, percent }: any): string => `${name} ${((percent || 0) * 100).toFixed(0)}%`}
                         >
-                          <Cell fill="#ef4444" />
-                          <Cell fill="#f59e0b" />
-                          <Cell fill="#3b82f6" />
+                          {/* 动态渲染颜色 */}
+                          {(() => {
+                            let concept = 0, calc = 0, logic = 0, other = 0;
+                            if (activeRecord?.questionList) {
+                              activeRecord.questionList.forEach(q => {
+                                q.小问列表?.forEach(sub => {
+                                  const r = sub.错因归因 || '';
+                                  if (Number(sub.本小问学生得分) >= Number(sub.本小问满分) || r.includes('作答正确') || r.includes('无错误')) return;
+                                  if (r.includes('概念') || r.includes('定理') || r.includes('公式')) concept++;
+                                  else if (r.includes('计算') || r.includes('符号') || r.includes('算错')) calc++;
+                                  else if (r.includes('逻辑') || r.includes('步骤') || r.includes('思路') || r.includes('推导') || r.includes('严谨')) logic++;
+                                  else other++;
+                                });
+                              });
+                            }
+                            const totalErr = concept + calc + logic + other;
+                            if (totalErr === 0) return <Cell fill="#10b981" />;
+                            return [
+                              concept > 0 && <Cell key="1" fill="#ef4444" />,
+                              calc > 0 && <Cell key="2" fill="#f59e0b" />,
+                              logic > 0 && <Cell key="3" fill="#3b82f6" />,
+                              other > 0 && <Cell key="4" fill="#8b5cf6" />,
+                            ];
+                          })()}
                         </Pie>
                         <Tooltip />
                         <Legend verticalAlign="bottom" height={36}/>
@@ -876,7 +947,7 @@ export default function Home() {
                           src={img}
                           alt={`作业图 ${idx + 1}`}
                           onClick={() => setPreviewImage(img)}
-                          className="max-h-40 border rounded cursor-pointer"
+                          className="max-h-40 border rounded cursor-pointer" // 虽然加了 cursor-pointer 但没有点击事件
                         />
                       ))}
                     </div>
@@ -1366,6 +1437,26 @@ export default function Home() {
             </div>
           </div>
         )}
+        {previewImage && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm cursor-zoom-out"
+          onClick={() => setPreviewImage(null)}
+        >
+          <div className="relative max-w-4xl max-h-[90vh]">
+            <img
+              src={previewImage}
+              alt="Full Preview"
+              className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl"
+            />
+            <button
+              onClick={() => setPreviewImage(null)}
+              className="absolute -top-4 -right-4 bg-white text-gray-800 rounded-full w-10 h-10 flex items-center justify-center font-bold text-lg shadow-lg hover:bg-gray-200 transition-colors"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
       </main>
     );
   }
