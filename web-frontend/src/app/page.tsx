@@ -442,7 +442,22 @@ export default function Home() {
 
       const safeName = (studentName || '').trim() || '测试学生';
 
-      const mainSubject = allParsedData.find(q => q.科目)?.科目 || '综合';
+      // 1. 优先看大模型有没有自动识别出来
+      let mainSubject = allParsedData.find((q: any) => q.科目 && q.科目 !== '综合')?.科目;
+
+      // 2. 如果大模型没给，前端开启“关键词兜底猜测”
+      if (!mainSubject) {
+        const allText = allParsedData.map(q => q.大题题干).join(' ');
+        if (allText.includes('证明') || allText.includes('函数') || allText.includes('方程') || allText.includes('几何')) {
+          mainSubject = '数学';
+        } else if (allText.includes('受力') || allText.includes('速度') || allText.includes('加速度') || allText.includes('摩擦力')) {
+          mainSubject = '物理';
+        } else if (allText.includes('元素') || allText.includes('反应') || allText.includes('溶液') || allText.includes('化学键')) {
+          mainSubject = '化学';
+        } else {
+          mainSubject = '综合';
+        }
+      }
       const newRecord: SubmitRecord = {
         id: '',
         studentName: safeName,
