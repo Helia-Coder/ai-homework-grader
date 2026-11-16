@@ -116,6 +116,9 @@ export default function Home() {
   const [recordList, setRecordList] = useState<SubmitRecordSummary[]>([]);
   const [activeRecord, setActiveRecord] = useState<SubmitRecord | null>(null);
 
+  // 👇 新增：记录左侧展开的学生姓名
+  const [expandedStudents, setExpandedStudents] = useState<Set<string>>(new Set());
+
   const [editTarget, setEditTarget] = useState<{
     bigIndex: number;
     subIndex: number;
@@ -830,59 +833,108 @@ export default function Home() {
               {recordList.length === 0 ? (
                 <p className="text-gray-400 text-sm">暂无学生提交作业</p>
               ) : (
-                <div className="space-y-3">
-                  {recordList.map(rec => (
-                    <div
-                      key={rec.id}
-                      onClick={() => handleSelectRecord(rec)}
-                      className={`p-3 rounded-lg border cursor-pointer transition ${
-                        activeRecord?.id === rec.id
-                          ? 'border-blue-500 bg-blue-50'
-                          : 'border-gray-200 hover:bg-gray-50'
-                      }`}
-                    >
-                      <div className="flex justify-between items-center">
-                        <span className="font-medium">{rec.studentName}</span>
-                        <div className="flex items-center gap-2">
-                          {rec.isReviewed ? (
-                            <CheckCircle className="text-green-500 w-4 h-4" />
-                          ) : (
-                            <FileText className="text-orange-400 w-4 h-4" />
-                          )}
-                          <button
-                            onClick={(e) => handleDeleteRecord(e, rec.id)}
-                            className="text-gray-400 hover:text-red-500 transition-colors p-1"
-                            title="删除记录"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
+                <div className="space-y-4">
+                  {/* 👇 核心修改：按学生姓名折叠 */}
+                  {Array.from(new Set(recordList.map(r => r.studentName))).map(studentName => {
+                    const studentRecords = recordList.filter(r => r.studentName === studentName);
+                    const isExpanded = expandedStudents.has(studentName);
+
+                    return (
+                      <div key={studentName} className="border rounded-lg overflow-hidden">
+                        <button
+                          onClick={() => {
+                            setExpandedStudents(prev => {
+                              const next = new Set(prev);
+                              if (next.has(studentName)) next.delete(studentName);
+                              else next.add(studentName);
+                              return next;
+                            });
+                          }}
+                          className="w-full flex justify-between items-center p-3 bg-gray-50 hover:bg-gray-100 font-semibold text-gray-800"
+                        >
+                          <span className="flex items-center gap-2">
+                            👤 {studentName}
+                            <span className="text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full">
+                              {studentRecords.length} 份
+                            </span>
+                          </span>
+                          {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                        </button>
+
+                        {isExpanded && (
+                          <div className="p-2 space-y-2 bg-white">
+                            {studentRecords.map(rec => (
+                              <div
+                                key={rec.id}
+                                onClick={() => handleSelectRecord(rec)}
+                                className={`p-3 rounded-lg border cursor-pointer transition ${
+                                  activeRecord?.id === rec.id
+                                    ? 'border-blue-500 bg-blue-50'
+                                    : 'border-gray-200 hover:bg-gray-50'
+                                }`}
+                              >
+                                <div className="flex justify-between items-center">
+                                  <span className="text-sm text-gray-700">
+                                    {rec.submitTime}
+                                  </span>
+                                  <div className="flex items-center gap-2">
+                                    {rec.isReviewed ? (
+                                      <CheckCircle className="text-green-500 w-4 h-4" />
+                                    ) : (
+                                      <FileText className="text-orange-400 w-4 h-4" />
+                                    )}
+                                    <button
+                                      onClick={(e) => handleDeleteRecord(e, rec.id)}
+                                      className="text-gray-400 hover:text-red-500 transition-colors p-1"
+                                      title="删除记录"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                </div>
+                                <div className="text-xs mt-1 text-gray-500">
+                                  共 {rec.questionList?.length || 0} 道大题
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                      <div className="text-xs text-gray-500">{rec.submitTime}</div>
-                      <div className="text-xs mt-1">
-                        共 {rec.questionList?.length || 0} 道大题
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
 
             {/* 👇 宏观学情饼图 */}
             <div className="col-span-12 mb-2 bg-white p-6 rounded-xl shadow border border-gray-100">
-              <h2 className="font-bold text-lg mb-4 text-gray-800">📊 班级高频错因分析（全班汇总）</h2>
+              <h2 className="font-bold text-lg mb-4 text-gray-800">
+                📊 {activeRecord ? `${activeRecord.studentName} 的个人错因画像` : '班级高频错因分析（全班汇总）'}
+              </h2>
               <div className="h-64 w-full">
                 {(() => {
-                  let concept = 0, calc = 0, logic = 0, other = 0;
+                  let concept = 0, calc = 0, logic = 0, other = 0, unanswered = 0;
 
-                  recordList.forEach(rec => {
+                  const targetList = activeRecord ? [activeRecord] : recordList;
+
+                  targetList.forEach(rec => {
                     rec.questionList?.forEach(q => {
                       q.小问列表?.forEach(sub => {
                         const r = sub.错因归因 || '';
+                        const answer = (sub.学生作答 || '').trim();
                         const score = Number(sub.本小问学生得分 || 0);
                         const max = Number(sub.本小问满分 || 0);
 
-                        if (score >= max || r.includes('作答正确') || r.includes('无错误') || r.includes('全对')) {
+                        if (answer === '' || r.includes('未作答') || r.includes('空白') || r.includes('未写')) {
+                          unanswered++;
+                          return;
+                        }
+
+                        if (score >= max && max > 0) {
+                          return;
+                        }
+
+                        if (r.includes('作答正确') || r.includes('无错误') || r.includes('全对')) {
                           return;
                         }
 
@@ -894,8 +946,8 @@ export default function Home() {
                     });
                   });
 
+                  const totalErrors = concept + calc + logic + other + unanswered;
                   let chartData = [];
-                  const totalErrors = concept + calc + logic + other;
 
                   if (totalErrors === 0) {
                     chartData = [{ name: '全对 / 无错题', value: 1, color: '#10b981' }];
@@ -904,6 +956,7 @@ export default function Home() {
                       { name: '概念模糊', value: concept, color: '#ef4444' },
                       { name: '计算失误', value: calc, color: '#f59e0b' },
                       { name: '逻辑断层', value: logic, color: '#3b82f6' },
+                      { name: '未作答', value: unanswered, color: '#6b7280' },
                       { name: '其他错误', value: other, color: '#8b5cf6' },
                     ].filter(item => item.value > 0);
                   }
@@ -925,7 +978,7 @@ export default function Home() {
                             <Cell key={`cell-${index}`} fill={entry.color} />
                           ))}
                         </Pie>
-                        <Tooltip formatter={(value: any) => [`${value} 个小问`, '错误数量']} />
+                        <Tooltip formatter={(value: any) => [`${value} 个小问`, '数量']} />
                         <Legend verticalAlign="bottom" height={36}/>
                       </PieChart>
                     </ResponsiveContainer>
@@ -1665,6 +1718,7 @@ export default function Home() {
               <div className="space-y-6">
                 {(bigItem.小问列表 || []).map((subItem, subIdx) => {
                   const isTeacherEdited = (subItem as any).hasManualEdit || bigItem.hasManualEdit;
+                  const isFullScore = Number(subItem.本小问学生得分 || 0) >= Number(subItem.本小问满分 || 0) && Number(subItem.本小问满分 || 0) > 0;
 
                   return (
                     <div
@@ -1803,17 +1857,26 @@ export default function Home() {
                       )}
 
                       <div className="mt-4 bg-white p-4 rounded-lg border border-gray-100">
-                        <div className="flex items-center gap-2 mb-2">
-                          <span className="font-bold text-gray-700 text-sm">🔍 错因归因：</span>
-                          {isTeacherEdited && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-bold">已复核</span>}
-                        </div>
-                        <div className="mb-2 text-gray-600 text-sm ml-1">{subItem.错因归因 || ''}</div>
+                        {isFullScore ? (
+                          <div className="flex items-center gap-2 text-green-600 font-bold text-sm">
+                            <CheckCircle className="w-4 h-4" />
+                            作答完全正确，暂无错因分析。请继续保持！
+                          </div>
+                        ) : (
+                          <>
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="font-bold text-gray-700 text-sm">🔍 错因归因：</span>
+                              {isTeacherEdited && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-bold">已复核</span>}
+                            </div>
+                            <div className="mb-2 text-gray-600 text-sm ml-1">{subItem.错因归因 || ''}</div>
 
-                        <div className="flex items-center gap-2 mb-2 mt-4">
-                          <span className="font-bold text-gray-700 text-sm">💡 讲评建议：</span>
-                          {isTeacherEdited && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-bold">已复核</span>}
-                        </div>
-                        <div className="text-gray-600 text-sm ml-1">{subItem.讲评建议 || ''}</div>
+                            <div className="flex items-center gap-2 mb-2 mt-4">
+                              <span className="font-bold text-gray-700 text-sm">💡 讲评建议：</span>
+                              {isTeacherEdited && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-bold">已复核</span>}
+                            </div>
+                            <div className="text-gray-600 text-sm ml-1">{subItem.讲评建议 || ''}</div>
+                          </>
+                        )}
                       </div>
                     </div>
                   );
