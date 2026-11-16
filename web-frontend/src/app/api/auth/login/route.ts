@@ -3,10 +3,22 @@ import { PrismaClient } from '@prisma/client';
 import { SignJWT } from 'jose';
 
 const prisma = new PrismaClient();
-const JWT_SECRET = new TextEncoder().encode('your-super-secret-key-change-this-in-production');
+
+// 签名密钥一律走环境变量（模板见 .env.example）。
+// 开发期保留兜底值以便本地直接启动；生产环境缺失配置时直接拒绝签发，
+// 避免用写在源码里的默认值签发可被伪造的 Token。
+const DEV_FALLBACK_SECRET = 'dev-only-insecure-secret';
+function resolveJwtSecret() {
+  const secret = process.env.JWT_SECRET;
+  if (!secret && process.env.NODE_ENV === 'production') {
+    throw new Error('生产环境必须配置环境变量 JWT_SECRET');
+  }
+  return new TextEncoder().encode(secret || DEV_FALLBACK_SECRET);
+}
 
 export async function POST(req: Request) {
   try {
+    const JWT_SECRET = resolveJwtSecret();
     const { username, password } = await req.json();
 
     if (!username || !password) {
@@ -41,8 +53,10 @@ export async function POST(req: Request) {
     });
 
     return response;
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('登录接口报错:', error);
-    return NextResponse.json({ error: '数据库连接失败' }, { status: 500 });
+    const message =
+      error instanceof Error ? error.message : '登录失败，请稍后重试';
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

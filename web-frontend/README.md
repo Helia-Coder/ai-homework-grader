@@ -1,36 +1,30 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# web-frontend · Next.js 应用主体
 
-## Getting Started
+本目录是「智阅 · AI 智能作业批改与学情分析系统」的前端 + 服务端接口实现（Next.js 16 App Router）。
 
-First, run the development server:
+> **完整的项目介绍、技术架构、安装运行指南、环境变量说明与团队信息，请见仓库根目录的 [`../README.md`](../README.md)。**
+> 技术文档、演示视频脚本与提交材料自查位于 [`../docs/`](../docs/)。
+
+## 本目录速查
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cd web-frontend
+npm install
+cp .env.example .env.local   # 填入真实配置，切勿提交
+npx prisma generate && npx prisma db push
+npm run dev                  # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+| 路径 | 作用 |
+|---|---|
+| `src/app/page.tsx` | 登录页、教师学情看板、学生提交与批改详情（单页多角色） |
+| `src/app/api/auth/login/` | 账号校验与 JWT 签发 |
+| `src/app/api/grade/` | 多模态识别 + 结构化批改 + 算分校准 |
+| `src/app/api/evaluate/` | 规则检索 + SSE 流式讲评 |
+| `src/app/api/submitRecord/` | 提交记录的增删改查 |
+| `src/lib/dashscope.ts` | 上游模型统一封装（超时 / 重试 / 错误信息） |
+| `src/lib/mathTool.ts` | 原生算分工具，拦截模型分数幻觉 |
+| `src/lib/rules.json` | 本地评分细则知识库 |
+| `prisma/schema.prisma` | MySQL 数据模型 |
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+`AGENTS.md` 为 Next.js 16 自动生成的开发约定文件，请勿手动删除，否则 `next dev` 会重新生成造成未提交改动。
