@@ -109,7 +109,12 @@ export default function Home() {
   const [evaluatingIndex, setEvaluatingIndex] = useState<number | null>(null);
   const [evalResults, setEvalResults] = useState<Record<number, string>>({});
 
-  const [studentName, setStudentName] = useState<string>('测试学生');
+  const [studentName, setStudentName] = useState<string>(() => {
+  if (typeof window !== 'undefined') {
+    return localStorage.getItem('userName') || '测试学生';
+  }
+  return '测试学生';
+});
   const [historyRecords, setHistoryRecords] = useState<SubmitRecordSummary[]>([]);
   const [activeHistoryRecord, setActiveHistoryRecord] = useState<SubmitRecord | null>(null);
 
@@ -1550,12 +1555,11 @@ export default function Home() {
       </div>
 
       <div className="w-full max-w-lg mb-4">
-        <label className="text-sm text-gray-600">姓名</label>
+        <label className="text-sm text-gray-600">当前登录学生</label>
         <input
           value={studentName}
-          onChange={e => setStudentName(e.target.value)}
-          className="w-full border rounded-lg p-2 mt-1"
-          placeholder="请输入姓名"
+          disabled  // 👈 核心：加上这个，彻底锁死，改不了啦
+          className="w-full border rounded-lg p-2 mt-1 bg-gray-100 text-gray-500 cursor-not-allowed" // 👈 改成灰色背景和不可点击的鼠标样式
         />
       </div>
 
