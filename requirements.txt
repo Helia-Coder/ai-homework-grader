@@ -1,0 +1,5 @@
+# 根目录实验脚本依赖（不参与线上运行，仅开发期验证接口链路）
+# 安装：python -m pip install -r requirements.txt
+requests>=2.31.0
+Pillow>=10.0.0
+python-dotenv>=1.0.0

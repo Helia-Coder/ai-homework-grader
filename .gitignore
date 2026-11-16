@@ -1,12 +1,41 @@
-# 忽略环境变量和密钥
+# ---------- 环境变量与密钥 ----------
+# 任何真实密钥都不得进入公开仓库；仓库内只保留 .env.example 模板
 .env
+.env.*
+!.env.example
+.env.local
+*.pem
+*.key
 
-# 忽略 Python 虚拟环境
+# ---------- IDE / 编辑器 ----------
+.idea/
+.vscode/
+*.iml
+
+# ---------- Node / Next.js ----------
+node_modules/
+.next/
+out/
+build/
+*.tsbuildinfo
+.vercel
+
+# ---------- Python ----------
 .venv/
 venv/
 __pycache__/
 *.pyc
 
-# 忽略测试用的图片（避免占用仓库空间，且涉及学生隐私）
+# ---------- 数据与日志 ----------
+.data/
+*.log
+*.sqlite
+*.db
+
+# ---------- 学生作业原图 ----------
+# 含姓名与笔迹，涉及隐私，不进入公开仓库
 *.jpg
+*.jpeg
 *.png
+!web-frontend/public/*.png
+!web-frontend/public/*.jpg
