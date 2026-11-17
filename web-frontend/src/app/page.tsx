@@ -1,8 +1,5 @@
 "use client";
 import { useState, useEffect, useRef, useCallback } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import {
   UploadCloud,
@@ -25,6 +22,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import MathMarkdown from '@/components/MathMarkdown';
 
 import type {
   BigQuestionData,
@@ -45,6 +43,57 @@ import {
   sumStepMax,
   toNumber,
 } from '@/lib/score';
+
+// ==========================================
+// 工具方法：错因归因分类（供错因分布饼图使用）
+// 返回：'correct' | 'unanswered' | 'concept' | 'calc' | 'logic' | 'other'
+// ==========================================
+type ErrorCategory = 'correct' | 'unanswered' | 'concept' | 'calc' | 'logic' | 'other';
+
+function classifyErrorReason(sub: {
+  学生作答?: string;
+  错因归因?: string;
+  本小问学生得分?: string | number;
+  本小问满分?: string | number;
+}): ErrorCategory {
+  const r = (sub.错因归因 || '').trim();
+  const answer = (sub.学生作答 || '').trim();
+  const score = Number(sub.本小问学生得分 || 0);
+  const max = Number(sub.本小问满分 || 0);
+
+  // 1) 未作答：空答案或错因里明确写了未作答/空白/未写
+  if (answer === '' || r.includes('未作答') || r.includes('空白') || r.includes('未写')) {
+    return 'unanswered';
+  }
+
+  // 2) 满分：得分 >= 满分（满分>0）视为答对，不计入错误分布
+  if (max > 0 && score >= max) {
+    return 'correct';
+  }
+
+  // 3) 错因明确判定为正确：兼容 AI 的各种写法，尤其是常见的光秃秃「正确」
+  //    注意「不正确 / 部分正确」这类否定表述不应算正确，交由后面的关键词继续分类
+  if (
+    r === '正确' ||
+    r === '无误' ||
+    r === '作答正确' ||
+    r === '无错误' ||
+    r === '全对' ||
+    (r.includes('正确') && !r.includes('不') && !r.includes('部分')) ||
+    r.includes('无错误') ||
+    r.includes('全对')
+  ) {
+    return 'correct';
+  }
+
+  // 4) 按关键词归类错误类型（命中优先级：概念 → 计算 → 逻辑）
+  if (/概念|定理|公式|性质|定义|知识点/.test(r)) return 'concept';
+  if (/计算|符号|算错|粗心|配平|方程|化简|运算|计算失误/.test(r)) return 'calc';
+  if (/逻辑|步骤|思路|推导|严谨|证明|推理/.test(r)) return 'logic';
+
+  // 5) 兜底：其他错误
+  return 'other';
+}
 
 // ==========================================
 // 工具方法：前端图片压缩
@@ -143,6 +192,8 @@ export default function Home() {
   const [saveState, setSaveState] = useState<SaveState>('idle');
 
   const activeHistoryIdRef = useRef<string | null>(null);
+  // 学生端当前打开记录的完整详情快照，用于轮询时比对是否有实质更新（避免闭包拿到 stale state）
+  const activeHistoryDetailRef = useRef<SubmitRecord | null>(null);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autosavePendingRef = useRef<SubmitRecord | null>(null);
 
@@ -307,25 +358,25 @@ export default function Home() {
         setHistoryRecords(data.filter((r: SubmitRecordSummary) => r.studentName === studentName));
 
         const currentId = activeHistoryIdRef.current;
-        if (currentId) {
-          const latest = data.find((r: SubmitRecordSummary) => r.id === currentId);
-          if (latest) {
-            setActiveHistoryRecord(prev => {
-              if (!prev) return prev;
-              const needSyncQuestions = !prev.isReviewed && latest.isReviewed;
-              if (needSyncQuestions) {
-                setResults(latest.questionList);
-              }
-              return {
-                ...prev,
-                teacherComment: latest.teacherComment,
-                isReviewed: latest.isReviewed,
-                submitTime: latest.submitTime,
-                questionList: needSyncQuestions ? latest.questionList : prev.questionList,
-              };
-            });
-          }
-        }
+        if (!currentId) return;
+
+        // 摘要里的 questionList 只有 id，不能用于展示分数——必须重新拉完整详情。
+        // 无论是「首次复核」还是「复核后老师再次改分」，只要内容变了都同步给学生。
+        const latest = await fetchRecordDetail(currentId);
+        if (!latest || cancelled) return;
+
+        const prev = activeHistoryDetailRef.current;
+        const changed =
+          !prev ||
+          prev.isReviewed !== latest.isReviewed ||
+          prev.teacherComment !== latest.teacherComment ||
+          JSON.stringify(prev.questionList) !== JSON.stringify(latest.questionList);
+        if (!changed) return;
+
+        // 先更新 ref 快照，再更新 state；setResults 放在 updater 外部，避免嵌套 setState 副作用
+        activeHistoryDetailRef.current = latest;
+        setActiveHistoryRecord(latest);
+        setResults(latest.questionList);
       } catch (err) {
         console.log('轮询同步失败', err);
       }
@@ -337,7 +388,7 @@ export default function Home() {
       cancelled = true;
       clearInterval(pollTimer);
     };
-  }, [role, studentName]);
+  }, [role, studentName, fetchRecordDetail]);
 
   useEffect(() => {
     activeHistoryIdRef.current = activeHistoryRecord?.id ?? null;
@@ -472,6 +523,7 @@ export default function Home() {
         const saved: SubmitRecord = { ...newRecord, id: savedId };
 
         setActiveHistoryRecord(saved);
+        activeHistoryDetailRef.current = saved;
         setHistoryRecords(prev => [
           { ...saved, imgCount: saved.imgList.length },
           ...prev.filter(r => r.id !== savedId),
@@ -556,6 +608,7 @@ export default function Home() {
         return;
       }
       setActiveHistoryRecord(detail);
+      activeHistoryDetailRef.current = detail;
       setResults(detail.questionList);
     } catch (e) {
       console.error(e);
@@ -918,51 +971,32 @@ export default function Home() {
               </h2>
               <div className="h-64 w-full">
                 {(() => {
-                  let concept = 0, calc = 0, logic = 0, other = 0, unanswered = 0;
+                  const counts: Record<ErrorCategory, number> = {
+                    correct: 0, unanswered: 0, concept: 0, calc: 0, logic: 0, other: 0,
+                  };
 
                   const targetList = activeRecord ? [activeRecord] : recordList;
 
                   targetList.forEach(rec => {
                     rec.questionList?.forEach(q => {
                       q.小问列表?.forEach(sub => {
-                        const r = sub.错因归因 || '';
-                        const answer = (sub.学生作答 || '').trim();
-                        const score = Number(sub.本小问学生得分 || 0);
-                        const max = Number(sub.本小问满分 || 0);
-
-                        if (answer === '' || r.includes('未作答') || r.includes('空白') || r.includes('未写')) {
-                          unanswered++;
-                          return;
-                        }
-
-                        if (score >= max && max > 0) {
-                          return;
-                        }
-
-                        if (r.includes('作答正确') || r.includes('无错误') || r.includes('全对')) {
-                          return;
-                        }
-
-                        if (r.includes('概念') || r.includes('定理') || r.includes('公式') || r.includes('性质')) concept++;
-                        else if (r.includes('计算') || r.includes('符号') || r.includes('算错') || r.includes('粗心')) calc++;
-                        else if (r.includes('逻辑') || r.includes('步骤') || r.includes('思路') || r.includes('推导') || r.includes('严谨') || r.includes('证明')) logic++;
-                        else other++;
+                        counts[classifyErrorReason(sub)]++;
                       });
                     });
                   });
 
-                  const totalErrors = concept + calc + logic + other + unanswered;
+                  const totalErrors = counts.unanswered + counts.concept + counts.calc + counts.logic + counts.other;
                   let chartData = [];
 
                   if (totalErrors === 0) {
                     chartData = [{ name: '全对 / 无错题', value: 1, color: '#10b981' }];
                   } else {
                     chartData = [
-                      { name: '概念模糊', value: concept, color: '#ef4444' },
-                      { name: '计算失误', value: calc, color: '#f59e0b' },
-                      { name: '逻辑断层', value: logic, color: '#3b82f6' },
-                      { name: '未作答', value: unanswered, color: '#6b7280' },
-                      { name: '其他错误', value: other, color: '#8b5cf6' },
+                      { name: '概念模糊', value: counts.concept, color: '#ef4444' },
+                      { name: '计算失误', value: counts.calc, color: '#f59e0b' },
+                      { name: '逻辑断层', value: counts.logic, color: '#3b82f6' },
+                      { name: '未作答', value: counts.unanswered, color: '#6b7280' },
+                      { name: '其他错误', value: counts.other, color: '#8b5cf6' },
                     ].filter(item => item.value > 0);
                   }
 
@@ -1112,9 +1146,9 @@ export default function Home() {
                             <div className="p-4 space-y-3">
                               <div className="text-sm text-gray-600 bg-gray-50 p-2 rounded">
                                 题干：
-                                <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                                <MathMarkdown>
                                   {bigQ.大题题干 || ''}
-                                </ReactMarkdown>
+                                </MathMarkdown>
                               </div>
 
                               <div className="flex items-center gap-2">
@@ -1175,24 +1209,24 @@ export default function Home() {
                                         <div className="grid md:grid-cols-2 gap-3 text-sm">
                                           <div>
                                             <div className="text-xs text-gray-500">题干</div>
-                                            <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                                            <MathMarkdown>
                                               {subQ.小问题干 || ''}
-                                            </ReactMarkdown>
+                                            </MathMarkdown>
                                           </div>
                                           <div>
                                             <div className="text-xs text-gray-500">学生作答</div>
-                                            <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                                            <MathMarkdown>
                                               {subQ.学生作答 || ''}
-                                            </ReactMarkdown>
+                                            </MathMarkdown>
                                           </div>
                                         </div>
 
                                         {subQ.选项内容 && subQ.选项内容.trim() && (
                                           <div className="text-sm">
                                             <div className="text-xs text-gray-500">选项</div>
-                                            <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                                            <MathMarkdown>
                                               {subQ.选项内容}
-                                            </ReactMarkdown>
+                                            </MathMarkdown>
                                           </div>
                                         )}
 
@@ -1713,9 +1747,9 @@ export default function Home() {
                   📝 大题题干
                 </span>
                 <div className="bg-gray-50 p-4 rounded-xl text-gray-800 text-base leading-relaxed border border-gray-100">
-                  <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                  <MathMarkdown>
                     {bigItem.大题题干 || ''}
-                  </ReactMarkdown>
+                  </MathMarkdown>
                 </div>
               </div>
 
@@ -1769,15 +1803,15 @@ export default function Home() {
                             📝 小问题干
                           </span>
                           <div className="bg-white p-3 rounded-lg text-gray-800 text-sm border border-gray-100 min-h-[60px]">
-                            <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                            <MathMarkdown>
                               {subItem.小问题干 || ''}
-                            </ReactMarkdown>
+                            </MathMarkdown>
 
                             {subItem.选项内容 && subItem.选项内容.trim() && (
                               <div className="mt-3 pt-3 border-t border-gray-100 text-gray-700">
-                                <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                                <MathMarkdown>
                                   {subItem.选项内容}
-                                </ReactMarkdown>
+                                </MathMarkdown>
                               </div>
                             )}
                           </div>
@@ -1787,9 +1821,9 @@ export default function Home() {
                             ✍️ 学生作答
                           </span>
                           <div className="bg-white p-3 rounded-lg text-gray-800 text-sm border border-gray-100 min-h-[60px]">
-                            <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                            <MathMarkdown>
                               {subItem.学生作答 || ''}
-                            </ReactMarkdown>
+                            </MathMarkdown>
                           </div>
                         </div>
                       </div>
@@ -1800,9 +1834,9 @@ export default function Home() {
                             📌 评分细则
                           </span>
                           <div className="bg-amber-50 p-3 rounded-lg text-amber-900 text-sm border border-amber-200">
-                            <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                            <MathMarkdown>
                               {subItem.评分细则}
-                            </ReactMarkdown>
+                            </MathMarkdown>
                           </div>
                         </div>
                       )}
@@ -1922,9 +1956,9 @@ export default function Home() {
                 {evalResults[bigIdx] && (
                   <div className="mt-5 p-6 bg-gradient-to-br from-green-50 to-emerald-50 border border-green-200 rounded-xl shadow-inner">
                     <div className="prose prose-green max-w-none text-gray-800">
-                      <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                      <MathMarkdown>
                         {evalResults[bigIdx]}
-                      </ReactMarkdown>
+                      </MathMarkdown>
                     </div>
                   </div>
                 )}

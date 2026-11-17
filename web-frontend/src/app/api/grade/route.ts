@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { chatCompletion, GRADE_MODEL } from '@/lib/dashscope';
 import { parseGradingResult } from '@/lib/grading-parser';
 import { validateAndFixScores } from '@/lib/mathTool';
+import { verifyToken, unauthorized } from '@/lib/auth';
 
 export const maxDuration = 300;
 
@@ -93,6 +94,10 @@ const PROMPT = `你是一个极速响应的数理化作业批改助手。请直�
 
 export async function POST(request: Request) {
   try {
+    // AI 批改会消耗真实模型额度，必须先鉴权
+    const auth = await verifyToken(request);
+    if (!auth) return unauthorized();
+
     const body = await request.json().catch(() => ({}));
     const img_b64 = body?.img_b64;
 
@@ -140,8 +145,7 @@ export async function POST(request: Request) {
 
    return NextResponse.json({ result: fixedContent, data: fixedData });
   } catch (error) {
-    const message = error instanceof Error ? error.message : '未知错误';
-    console.error('[grade] 异常：', message);
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error('[grade] 异常：', error);
+    return NextResponse.json({ error: '批改服务暂时不可用，请稍后重试' }, { status: 500 });
   }
 }

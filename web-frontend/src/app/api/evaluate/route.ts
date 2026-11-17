@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { chatCompletionStream, EVALUATE_MODEL } from '@/lib/dashscope';
 import rules from '@/lib/rules.json';
+import { verifyToken, unauthorized } from '@/lib/auth';
 
 export const maxDuration = 120;
 
@@ -39,6 +40,10 @@ ${answer}
 
 export async function POST(req: Request) {
   try {
+    // 深度讲评同样消耗模型额度，先鉴权再建立流式上游
+    const auth = await verifyToken(req);
+    if (!auth) return unauthorized();
+
     const body = await req.json().catch(() => ({}));
     const question = typeof body?.question === 'string' ? body.question : '';
     const answer = typeof body?.answer === 'string' ? body.answer : '';
@@ -116,8 +121,7 @@ export async function POST(req: Request) {
       },
     });
   } catch (e) {
-    const message = e instanceof Error ? e.message : '未知错误';
-    console.error('[evaluate] 异常：', message);
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error('[evaluate] 异常：', e);
+    return NextResponse.json({ error: '讲评服务暂时不可用，请稍后重试' }, { status: 500 });
   }
 }

@@ -49,9 +49,11 @@ export async function addRecord(data: any) {
 }
 
 // 获取列表（已移除导致内存爆炸的 orderBy，并加上异常捕获）
-export async function getRecordSummaries() {
+// studentName 传入时只返回该学生的记录，用于学生端数据隔离；教师端不传则看全部。
+export async function getRecordSummaries(studentName?: string) {
   try {
     const records = await prisma.record.findMany({
+      where: studentName ? { studentName } : undefined,
       select: {
         id: true,
         studentName: true,
@@ -73,7 +75,7 @@ export async function getRecordSummaries() {
       teacherComment: r.teacherComment,
       imgCount: Array.isArray(r.imgList) ? (r.imgList as any[]).length : 0,
       questionList: r.questionList as any,
-    })).sort((a, b) => (b.submitTime > a.submitTime ? 1 : -1));
+    })).sort((a, b) => String(b.submitTime).localeCompare(String(a.submitTime)));
 
   } catch (error) {
     console.error('❌ [数据库查询报错] 无法读取 Record 表：', error);
@@ -138,57 +140,59 @@ export async function getRecordById(id: string) {
   }
 }
 
-// 更新记录
+// 更新记录（整体事务：题目重建的 delete + create 必须原子完成，中途失败则全部回滚）
 export async function updateRecord(id: string, data: any) {
   try {
-    await prisma.record.update({
-      where: { id },
-      data: {
-        teacherComment: data.teacherComment,
-        isReviewed: data.isReviewed,
+    await prisma.$transaction(async (tx) => {
+      await tx.record.update({
+        where: { id },
+        data: {
+          teacherComment: data.teacherComment,
+          isReviewed: data.isReviewed,
+        }
+      });
+
+      if (data.questionList) {
+        await tx.bigQuestion.deleteMany({ where: { recordId: id } });
+
+        for (const big of data.questionList) {
+          await tx.bigQuestion.create({
+            data: {
+              recordId: id,
+              questionNumber: big.大题题号,
+              stem: big.大题题干,
+              totalScore: big.大题总分,
+              actualScore: big.大题实得分,
+              confidence: big.识别置信度 || '高',
+              hasManualEdit: big.hasManualEdit || false,
+              subQuestions: {
+                create: (big.小问列表 || []).map((sub: any) => ({
+                  subNumber: sub.小问编号,
+                  stem: sub.小问题干,
+                  studentAnswer: sub.学生作答,
+                  optionContent: sub.选项内容 || '',
+                  maxScore: sub.本小问满分,
+                  studentScore: sub.本小问学生得分,
+                  gradingRule: sub.评分细则 || '',
+                  errorReason: sub.错因归因,
+                  teachingAdvice: sub.讲评建议,
+                  hasManualEdit: sub.hasManualEdit || false,
+                  steps: {
+                    create: (sub.步骤明细 || []).map((st: any) => ({
+                      stepNumber: st.步骤序号,
+                      maxScore: st.该步骤满分,
+                      actualScore: st.实际得分,
+                      judgment: st.判定,
+                      explanation: st.说明
+                    }))
+                  }
+                }))
+              }
+            }
+          });
+        }
       }
     });
-
-    if (data.questionList) {
-      await prisma.bigQuestion.deleteMany({ where: { recordId: id } });
-
-      for (const big of data.questionList) {
-        await prisma.bigQuestion.create({
-          data: {
-            recordId: id,
-            questionNumber: big.大题题号,
-            stem: big.大题题干,
-            totalScore: big.大题总分,
-            actualScore: big.大题实得分,
-            confidence: big.识别置信度 || '高',
-            hasManualEdit: big.hasManualEdit || false,
-            subQuestions: {
-              create: (big.小问列表 || []).map((sub: any) => ({
-                subNumber: sub.小问编号,
-                stem: sub.小问题干,
-                studentAnswer: sub.学生作答,
-                optionContent: sub.选项内容 || '',
-                maxScore: sub.本小问满分,
-                studentScore: sub.本小问学生得分,
-                gradingRule: sub.评分细则 || '',
-                errorReason: sub.错因归因,
-                teachingAdvice: sub.讲评建议,
-                hasManualEdit: sub.hasManualEdit || false,
-                steps: {
-                  create: (sub.步骤明细 || []).map((st: any) => ({
-                    stepNumber: st.步骤序号,
-                    maxScore: st.该步骤满分,
-                    actualScore: st.实际得分,
-                    judgment: st.判定,
-                    explanation: st.说明
-                  }))
-                }
-              }))
-            }
-          }
-        });
-      }
-    }
     return true;
   } catch (error) {
     console.error("❌ [数据库更新报错]:", error);

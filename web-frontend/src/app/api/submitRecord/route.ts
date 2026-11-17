@@ -7,6 +7,7 @@ import {
   updateRecord,
 } from '@/lib/store';
 import type { BigQuestionData, SubmitRecord } from '@/lib/types';
+import { verifyToken, unauthorized, forbidden } from '@/lib/auth';
 
 function isNonEmptyString(v: unknown): v is string {
   return typeof v === 'string' && v.trim().length > 0;
@@ -24,6 +25,9 @@ function isValidQuestionList(v: unknown): v is BigQuestionData[] {
 
 export async function GET(req: Request) {
   try {
+    const auth = await verifyToken(req);
+    if (!auth) return unauthorized();
+
     const { searchParams } = new URL(req.url);
     const id = searchParams.get('id');
 
@@ -32,10 +36,17 @@ export async function GET(req: Request) {
       if (!record) {
         return NextResponse.json({ error: '找不到这条记录' }, { status: 404 });
       }
+      // 学生只能查看自己的作业详情，教师不限
+      if (auth.role === 'student' && record.studentName !== auth.name) {
+        return forbidden();
+      }
       return NextResponse.json(record);
     }
 
-    const summaries = await getRecordSummaries();
+    // 学生列表按姓名隔离；教师看全部
+    const summaries = await getRecordSummaries(
+      auth.role === 'student' ? auth.name : undefined
+    );
     return NextResponse.json(summaries);
   } catch (e) {
     console.error('[submitRecord] GET 异常：', e);
@@ -45,14 +56,14 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
+    const auth = await verifyToken(req);
+    if (!auth) return unauthorized();
+
     const payload = await req.json().catch(() => null);
     if (!payload || typeof payload !== 'object') {
       return NextResponse.json({ error: '请求体格式错误' }, { status: 400 });
     }
 
-    if (!isNonEmptyString(payload?.studentName)) {
-      return NextResponse.json({ error: '缺少学生姓名' }, { status: 400 });
-    }
     if (!isValidQuestionList(payload?.questionList)) {
       return NextResponse.json({ error: '批改结果格式不正确' }, { status: 400 });
     }
@@ -61,7 +72,8 @@ export async function POST(req: Request) {
     }
 
     const record = await addRecord({
-      studentName: payload.studentName.trim(),
+      // 姓名以登录身份为准，忽略请求体里的 studentName，防止冒名提交
+      studentName: auth.name,
       submitTime: isNonEmptyString(payload.submitTime)
         ? payload.submitTime
         : new Date().toLocaleString('zh-CN'),
@@ -81,13 +93,16 @@ export async function POST(req: Request) {
 
 export async function PUT(req: Request) {
   try {
+    const auth = await verifyToken(req);
+    if (!auth) return unauthorized();
+    if (auth.role !== 'teacher') return forbidden();
+
     const body = await req.json().catch(() => null);
     if (!body || typeof body !== 'object') {
       return NextResponse.json({ error: '请求体格式错误' }, { status: 400 });
     }
 
     const { id, questionList, teacherComment, isReviewed } = body;
-
     if (!isNonEmptyString(id)) {
       return NextResponse.json({ error: '缺少记录id' }, { status: 400 });
     }
@@ -115,7 +130,7 @@ export async function PUT(req: Request) {
       return NextResponse.json({ error: '找不到这条记录' }, { status: 404 });
     }
 
-    return NextResponse.json({ ok: true, id: updated.id });
+    return NextResponse.json({ ok: true });
   } catch (e) {
     console.error('[submitRecord] PUT 异常：', e);
     return NextResponse.json({ error: '更新失败' }, { status: 500 });
@@ -125,13 +140,16 @@ export async function PUT(req: Request) {
 // 保留 PATCH 以防万一
 export async function PATCH(req: Request) {
   try {
+    const auth = await verifyToken(req);
+    if (!auth) return unauthorized();
+    if (auth.role !== 'teacher') return forbidden();
+
     const body = await req.json().catch(() => null);
     if (!body || typeof body !== 'object') {
       return NextResponse.json({ error: '请求体格式错误' }, { status: 400 });
     }
 
     const { id, teacherComment, isReviewed } = body;
-
     if (!isNonEmptyString(id)) {
       return NextResponse.json({ error: '缺少记录id' }, { status: 400 });
     }
@@ -150,7 +168,7 @@ export async function PATCH(req: Request) {
       return NextResponse.json({ error: '找不到这条记录' }, { status: 404 });
     }
 
-    return NextResponse.json({ ok: true, id: updated.id });
+    return NextResponse.json({ ok: true });
   } catch (e) {
     console.error('[submitRecord] PATCH 异常：', e);
     return NextResponse.json({ error: '更新失败' }, { status: 500 });
@@ -159,6 +177,10 @@ export async function PATCH(req: Request) {
 
 export async function DELETE(req: Request) {
   try {
+    const auth = await verifyToken(req);
+    if (!auth) return unauthorized();
+    if (auth.role !== 'teacher') return forbidden();
+
     const body = await req.json().catch(() => null);
     const id = body?.id;
     if (!isNonEmptyString(id)) {

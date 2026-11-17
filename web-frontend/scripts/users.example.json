@@ -1,0 +1,5 @@
+[
+  { "username": "student3", "name": "王五", "role": "student", "password": "123456" },
+  { "username": "student4", "name": "赵六", "role": "student", "password": "123456" },
+  { "username": "teacher2", "name": "李老师", "role": "teacher", "password": "123456" }
+]

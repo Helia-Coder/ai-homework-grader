@@ -127,27 +127,52 @@ export function applySubStandardScore(
 }
 
 /**
- * 修改大题标准总分。
+ * 修改大题标准总分（满分）—— 始终联动所有小问。
  *
- * - 若该大题**未**被人工改过分数：按比例缩放所有小问的满分与得分
- * - 若**已**被人工改过分数：只重算大题实得分，不动小问分值
- *   （人工判断优先，不能被比例缩放覆盖）
+ * - 无论该大题是否被人工改过分，都按比例缩放其下所有小问的满分与得分，
+ *   并同步缩放步骤明细，保证「步骤满分之和 == 小问满分 == 大题总分」自洽。
+ * - hasManualEdit 现在仅作为学生端「教师修正」标记展示，不再阻止缩放。
+ * - 缩放基准取「当前各小问满分之和」而非旧的大题总字段：
+ *   两者可能因 AI 计算或人工改动而不一致，用小问之和做基准可保证
+ *   缩放后 Σ小问满分 == 新大题总分。
  */
 export function applyBigStandardScore(
   big: BigQuestionData,
   value: string
 ): void {
-  const oldTotal = toNumber(big.大题总分);
   const newTotal = Math.max(0, toNumber(value));
   big.大题总分 = normalizeScore(newTotal);
 
-  if (!big.hasManualEdit && oldTotal > 0) {
-    const scale = newTotal / oldTotal;
-    big.小问列表.forEach((sq) => {
-      const subMax = toNumber(sq.本小问满分);
-      const subStu = toNumber(sq.本小问学生得分);
-      sq.本小问满分 = normalizeScore(subMax * scale);
-      sq.本小问学生得分 = normalizeScore(subStu * scale);
+  const subs = big.小问列表 || [];
+  const oldSubMaxSum = subs.reduce(
+    (s, sq) => s + toNumber(sq.本小问满分),
+    0
+  );
+
+  if (oldSubMaxSum > 0) {
+    const scale = newTotal / oldSubMaxSum;
+    subs.forEach((sq) => {
+      sq.本小问满分 = normalizeScore(toNumber(sq.本小问满分) * scale);
+      sq.本小问学生得分 = normalizeScore(toNumber(sq.本小问学生得分) * scale);
+      // 步骤明细必须同步缩放，否则会出现「小问满分变了、步骤满分还是旧的」，
+      // 触发前端分数不一致告警，保存后数据也自相矛盾。
+      sq.步骤明细 = (sq.步骤明细 || []).map((st) => ({
+        ...st,
+        该步骤满分: normalizeScore(toNumber(st.该步骤满分) * scale),
+        实际得分: normalizeScore(toNumber(st.实际得分) * scale),
+      }));
+    });
+  } else if (subs.length > 0 && newTotal > 0) {
+    // 兜底：原各小问满分全为 0 时无法按比例缩放，改为平均分配满分。
+    const avg = normalizeScore(newTotal / subs.length);
+    subs.forEach((sq) => {
+      sq.本小问满分 = avg;
+      sq.本小问学生得分 = '0';
+      sq.步骤明细 = (sq.步骤明细 || []).map((st) => ({
+        ...st,
+        该步骤满分: '0',
+        实际得分: '0',
+      }));
     });
   }
 
